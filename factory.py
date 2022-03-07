@@ -295,11 +295,15 @@ class factory(object):
         return result
     
     def step(self, action, pattern):
-        self.line_state[0][0][0] = [action, pattern]  # 모델과 패턴을 라인에 넣어줌
-        self.line_state[0][0][1] = self.df[self.find_model_index(action, self.df)][1].iloc[0,4] # 타이머 설정
-        self.stock[self.find_model_index(action,self.stock)][1] -= 1 # 생산했으니 재고에서 제외
+        # 모델과 패턴을 라인에 넣어줌
+        self.line_state[0][0][0] = [action, pattern]  
+        # 타이머 설정
+        self.line_state[0][0][1] = self.df[self.find_model_index(action, self.df)][1].iloc[0,4] 
+        # 생산했으니 재고에서 제외
+        self.stock[self.find_model_index(action,self.stock)][1] -= 1 
         
-        while self.line_state[0][0][0] != "empty": # 머신 비었거나 타이머 끝나면 넘기거나 뽑아오는 거 
+        # 머신 비었거나 타이머 끝나면 넘기거나 뽑아오는 거 
+        while self.line_state[0][0][0] != "empty": 
             for i in range(len(self.line_state[0])):
                 if self.line_state[0][i][0] == "empty": 
                     poplist = []
