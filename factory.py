@@ -11,6 +11,7 @@ import glob
 import os
 
 from sympy import legendre 
+from numba import jit
 
 #판다스 출력설정
 pd.set_option('display.max_rows', 500)
@@ -294,6 +295,7 @@ class factory(object):
         result.extend(self.buffer_vector(self.maxbuffer, self.line_state, self.pattern_df))
         return result
     
+    @jit(nopython=True)
     def step(self, action, pattern):
         # 모델과 패턴을 라인에 넣어줌
         self.line_state[0][0][0] = [action, pattern]  
@@ -335,9 +337,9 @@ class factory(object):
                     stocksum += i[1]
                 if stocksum == 0:
                     reward = self.total_time_rank - self.now_time
-                    return np.array(self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer)), reward, False, {}
+                    return np.array(self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer)), reward, True, {}
                 else:
-                    return np.array(self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer)), 0, True, {}        
+                    return np.array(self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer)), 0, False, {}        
     
     def make_timer(self, df, machine, model, now_state):
         model_index = self.find_model_index(model, df)

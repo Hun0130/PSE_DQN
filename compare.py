@@ -5,6 +5,8 @@ Comparing performance of deterministic methods
 
 import factory
 import random
+import main
+import torch
 from matplotlib import pyplot as plt
 
 """
@@ -144,10 +146,15 @@ def single_excute():
     # choice idx
     choice_idx = 0
     
+    path = 'model/NEW4584th_epi_model.pt'
+    # Q network
+    q = main.Qnet()
+    q.load_state_dict(torch.load(path))
+    
     # main loop
     while True:
         # Choose pattern allocating method
-        pattern_num = rigid_pattern(pattern_num)
+        #pattern_num = rigid_pattern(pattern_num)
         #pattern_num = circular_pattern_1(pattern_num)
         #pattern_num = circular_pattern_2(pattern_num)
         #pattern_num = circular_pattern_3(pattern_num)
@@ -156,7 +163,9 @@ def single_excute():
         # Choose model choosing method
         #choice_idx = rigid_model(env.choice, env.stock, pattern_num)
         #choice_idx = circular_model(env.choice, env.stock, pattern_num, choice_idx)
-        choice_idx = random_model(env.choice, env.stock, pattern_num)
+        #choice_idx = random_model(env.choice, env.stock, pattern_num)
+        
+        choice_idx = q.sample_action(torch.from_numpy(s).float(), 0, env.choice, env.stock)
         
         # Error check
         if choice_idx == -1:
@@ -165,7 +174,7 @@ def single_excute():
         
         model = env.choice[choice_idx][0][0]
         pattern = env.choice[choice_idx][0][1]
-        # print("Model: ", model, " Pattern: ", pattern, " Total stock: ", env.total_stock(env.stock))
+        print("Model: ", model, " Pattern: ", pattern, " Total stock: ", env.total_stock(env.stock))
         s_prime, r, done, info = env.step(model, pattern)
         
         if env.total_stock(env.stock) == 0:
@@ -174,7 +183,7 @@ def single_excute():
     return env.now_time
 
 result_time = []
-for i in range(10):
+for i in range(1):
     result_time.append(single_excute())
     
 print(result_time)
