@@ -135,7 +135,7 @@ def random_pattern(patter_num):
 # Main fuction
 def single_excute():
     # 공장환경 불러오기
-    product_list, time_table = factory.save_eval_data("05")
+    product_list, time_table = factory.save_eval_data("10")
     env = factory.factory(product_list, time_table)
     s = env.reset(product_list)
     
@@ -146,24 +146,24 @@ def single_excute():
     # choice idx
     choice_idx = 0
     
-    path = 'model/NEW4584th_epi_model.pt'
+    path = 'DQN_save/model_965.pth'
     # Q network
-    q = main.Qnet()
+    q = main.Qnet(len(env.reset(product_list)), len(env.choice)).to('cuda')
     q.load_state_dict(torch.load(path))
     
     # main loop
     while True:
         # Choose pattern allocating method
-        #pattern_num = rigid_pattern(pattern_num)
-        #pattern_num = circular_pattern_1(pattern_num)
-        #pattern_num = circular_pattern_2(pattern_num)
-        #pattern_num = circular_pattern_3(pattern_num)
-        #pattern_num = random_pattern(pattern_num)
+        # pattern_num = rigid_pattern(pattern_num)
+        # pattern_num = circular_pattern_1(pattern_num)
+        # pattern_num = circular_pattern_2(pattern_num)
+        # pattern_num = circular_pattern_3(pattern_num)
+        # pattern_num = random_pattern(pattern_num)
         
         # Choose model choosing method
-        #choice_idx = rigid_model(env.choice, env.stock, pattern_num)
-        #choice_idx = circular_model(env.choice, env.stock, pattern_num, choice_idx)
-        #choice_idx = random_model(env.choice, env.stock, pattern_num)
+        # choice_idx = rigid_model(env.choice, env.stock, pattern_num)
+        # choice_idx = circular_model(env.choice, env.stock, pattern_num, choice_idx)
+        # choice_idx = random_model(env.choice, env.stock, pattern_num)
         
         choice_idx = q.sample_action(torch.from_numpy(s).float(), 0, env.choice, env.stock)
         

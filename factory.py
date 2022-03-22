@@ -11,7 +11,7 @@ import glob
 import os
 
 from sympy import legendre 
-from numba import jit
+from numba import jit, njit
 
 #판다스 출력설정
 pd.set_option('display.max_rows', 500)
@@ -71,6 +71,10 @@ class factory(object):
         
         # [[제품, 패턴 번호], [Machine cycle time ...]]을 choice에 저장
         self.choice = self.make_choice(self.pattern_df)
+        
+        # 수정됨
+        self.record = []
+        self.on_line_time = []
     
     # 모델의 time data들을 sec 단위로 바꿔서 저장
     def set_df(self, product_list_with_df):
@@ -93,33 +97,34 @@ class factory(object):
         # 4개의 경우로 df를 나눠서 저장
         for i in range(4):
             new = copy.deepcopy(df)
-            # #110과 #160을 사용하는 경우
+            # 수정 필요
+            # 14와 17을 사용하는 경우
             if i == 0:
                 for a in new:
-                    # #110 Machine의 Cycle time
+                    # Machine 14의 Cycle time
                     a[1].iloc[15,4] = 9
-                    # #160 Machine의 Cycle time
+                    # Machine 17의 Cycle time
                     a[1].iloc[17,4] = 10
-            # #110과 #150을 사용하는 경우
+            # 14와 16을 사용하는 경우
             elif i == 1:
                 for a in new:
-                    # #110 Machine의 Cycle time
+                    # Machine 14의 Cycle time
                     a[1].iloc[15,4] = 10
-                    # #150 Machine의 Cycle time
+                    # Machine 16의 Cycle time
                     a[1].iloc[16,4] = 6 
-            # #120과 #160이 사용되는 경우
+            # 15과 17을 사용하는 경우
             elif i == 2:
                 for a in new:
-                    # #120 Machine의 Cycle time
+                    # Machine 15의 Cycle time
                     a[1].iloc[14,4] = 5
-                    # #160 Machine의 Cycle time
+                    # Machine 17의 Cycle time
                     a[1].iloc[17,4] = 9 
-            # #120과 #150이 사용되는 경우
+            # 15와 16을 사용하는 경우
             elif i == 3:
                 for a in new:
-                    # #120 Machine의 Cycle time
+                    # Machine 15의 Cycle time
                     a[1].iloc[14,4] = 6
-                    # #150 Machine의 Cycle time
+                    # Machine 16의 Cycle time
                     a[1].iloc[16,4] = 5 
             pattern_list.append(new)
         return pattern_list
@@ -142,8 +147,9 @@ class factory(object):
     def set_stock(self, df):
         stock_state_list = []
         for i in df:
+            # if i[0] != '46700-Q5900':
             # 전체 생산 수량 낮춰주고 싶으면 i[1].iloc[18, 5]를 조절해주면 된다.
-            stock_state_list.append([i[0],i[1].iloc[18,5]])         
+            stock_state_list.append([i[0],i[1].iloc[18,5] // 1] )         
         return stock_state_list
     
     # Machine의 수 만큼 빈 buffer []를 만들어서 저장
@@ -175,6 +181,7 @@ class factory(object):
         for i in range(len(pattern_df)):
             # 각 제품마다
             for a in pattern_df[i]:
+                # if a[0] != '46700-Q5900':
                 mid = []
                 act = []
                 ct = []
@@ -193,6 +200,7 @@ class factory(object):
     
     # self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer)
     # State: 머신 상태, 버퍼 상태, 머신별 작동 여부
+    # @njit(cache=True)
     def state_maker(self, line_state, time_state, pattern_df, max_buffer): 
         # 결과를 저장할 list
         result = []
@@ -295,7 +303,12 @@ class factory(object):
         result.extend(self.buffer_vector(self.maxbuffer, self.line_state, self.pattern_df))
         return result
     
-    @jit(nopython=True)
+    # 수정됨
+    def cal_reward(self, model, pattern, df, in_time, out_time):
+        return out_time-in_time-sum(self.model_vector(model, pattern, df)[0:20])
+    
+    
+    # @njit(cache=True)
     def step(self, action, pattern):
         # 모델과 패턴을 라인에 넣어줌
         self.line_state[0][0][0] = [action, pattern]  
@@ -303,6 +316,9 @@ class factory(object):
         self.line_state[0][0][1] = self.df[self.find_model_index(action, self.df)][1].iloc[0,4] 
         # 생산했으니 재고에서 제외
         self.stock[self.find_model_index(action,self.stock)][1] -= 1 
+        
+        # 수정됨
+        reward = 0
         
         # 머신 비었거나 타이머 끝나면 넘기거나 뽑아오는 거 
         while self.line_state[0][0][0] != "empty": 
@@ -315,6 +331,14 @@ class factory(object):
                         self.line_state[0][i][1] = self.pattern_df[poplist[0][1]][self.find_model_index(poplist[0][0], self.df)][1].iloc[i,4]
                 elif self.line_state[0][i][1] <= 0:
                     if len(self.line_state[1][i]) < self.maxbuffer[i]:
+                        # 수정됨 1
+                        # if i == len(self.line_state[0])-1 and len(self.on_line_time)>0:
+                        #     reward += self.cal_reward(self.line_state[0][i][0][0], self.line_state[0][i][0][1], self.pattern_df, self.on_line_time.pop(0), self.now_time)
+
+                        # 수정됨 2
+                        if i == len(self.line_state[0])-1:#마지막 머신에서 빠져나가는 것이므로 리워드 계산해서 반납함
+                            reward -= self.cal_reward(self.line_state[0][i][0][0], self.line_state[0][i][0][1], self.pattern_df, self.line_state[0][i][0][2], self.now_time)
+                        
                         poplist = []
                         poplist.append(self.line_state[0][i][0])
                         self.line_state[0][i] = ["empty", 0]
@@ -325,21 +349,37 @@ class factory(object):
                     if self.timer_list[i][1] <= 0:
                         self.timer_list[i][1] = self.make_timer(self.df, i, self.line_state[0][i][0][0], "up")
                         self.timer_list[i][0] = "down"
-                    self.now_time += 1
+                    # 수정전
+                    #self.now_time += 1
+                    
                 elif self.timer_list[i][0]== "down":
                     self.timer_list[i][1] -= 1
                     if self.timer_list[i][1] <= 0:
                         self.timer_list[i][1] = self.make_timer(self.df, i, self.line_state[0][i][0][0], "down")
                         self.timer_list[i][0] = "up"
+            # 수정됨
+            self.now_time += 1
+
             if self.line_state[0][0][0] == "empty":
                 stocksum = 0
                 for i in self.stock:
                     stocksum += i[1]
                 if stocksum == 0:
-                    reward = self.total_time_rank - self.now_time
+                    # 수정전
+                    # reward = self.total_time_rank - self.now_time
+                    
+                    # 수정됨
+                    self.record.append(self.now_time)
+                    #reward = (sum(self.record)/len(self.record) - self.now_time)**3/10
+                    if self.total_time_rank > self.now_time:
+                        self.total_time_rank = self.now_time
+                    
                     return np.array(self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer)), reward, True, {}
                 else:
-                    return np.array(self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer)), 0, False, {}        
+                    # 수정전
+                    # return np.array(self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer)), 0, False, {}       
+                    # 수정됨
+                    return np.array(self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer)), reward, False, {} 
     
     def make_timer(self, df, machine, model, now_state):
         model_index = self.find_model_index(model, df)
@@ -365,6 +405,9 @@ class factory(object):
         self.line_state = self.set_line_state(self.line,self.buffer)
         self.now_time = 0
         self.choice = self.make_choice(self.pattern_df) 
+        # 수정됨
+        self.total_work = 0
+        self.on_line_time = []
         return np.array(self.state_maker(self.line_state, self.timer_list, self.pattern_df, self.maxbuffer))
     
     def render(self):

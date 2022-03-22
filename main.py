@@ -22,11 +22,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(torch.cuda.is_available())
 print(torch.cuda.get_device_name(0))
 
-# https://www.youtube.com/watch?v=__NYgfkUr-M&t=960s&ab_channel=%ED%8C%A1%EC%9A%94%EB%9E%A9Pang-YoLab
 learning_rate = 0.05 # 원래는 0.0005
 gamma         = 0.98
 buffer_limit  = 50000
 batch_size    = 32
+epoch = 10000
 
 # ReplayBuffer
 class ReplayBuffer():
@@ -98,6 +98,12 @@ class Qnet(nn.Module):
                         if j[1] <= 0:
                             out[i] = -99999
             return out.argmax().item()
+        
+    def save(self, file_name = 'model.pth'):
+        model_folder_path = 'DQN_save/'
+        file_name = os.path.join(model_folder_path, file_name)
+        torch.save(self.state_dict(), file_name)
+
             
 def train(q, q_target, memory, optimizer):
     for i in range(10):
@@ -111,15 +117,11 @@ def train(q, q_target, memory, optimizer):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
-def save(model, file_name = 'model.pth'):
-    model_folder_path = 'DQN_save/'
-    file_name = os.path.join(model_folder_path, file_name)
-    torch.save(model.state_dict(), file_name)
 
 def main():
     # 공장환경 불러오기
-    product_list, time_table = factory.save_eval_data("05")
+    # 10월로 바꿀 것
+    product_list, time_table = factory.save_eval_data("10")
     env = factory.factory(product_list, time_table)
     
     q = Qnet(len(env.reset(product_list)), len(env.choice)).to('cuda')
@@ -134,22 +136,15 @@ def main():
     score = 0.0  
     optimizer = optim.Adam(q.parameters(), lr = learning_rate)
     
-    high_score = 0
-    model = ''
+    high_score = -1000000
+    model_name = ''
     
     result_list = []
     now_list = []
     
-    for n_epi in range(10000):
-        # save
-        if (high_score < score):
-            high_score = score
-            if os.path.isfile(('DQN_save/' + model_name)):
-                os.remove(('DQN_save/' + model_name))
-            model_name = 'model_' + str(n_epi) + '.pth'
-            save(q.model, model_name)
-        # Linear annealing from 8% to 1%
-        epsilon = max(0.01, 0.08 - 0.01*(n_epi / 200)) 
+    for n_epi in range(epoch):
+        # Linear annealing from 100% to 1%
+        epsilon = max(0.01, 1.0 - (1/epoch) * n_epi) 
         s = env.reset(product_list)
         done = False
         score = 0.0 
@@ -178,6 +173,14 @@ def main():
             q_target.load_state_dict(q.state_dict())
             print("n_episode :{}, score : {:.1f}, n_buffer : {}, eps : {:.1f}%".format(
                                                             n_epi, score/print_interval, memory.size(), epsilon*100))
+
+        # save
+        if (high_score < score):
+            high_score = score
+            if os.path.isfile(('DQN_save/' + model_name)):
+                os.remove(('DQN_save/' + model_name))
+            model_name = 'model_' + str(n_epi) + '.pth'
+            q.save(model_name)
     
     plt.subplot(211)
     plt.plot(result_list)
