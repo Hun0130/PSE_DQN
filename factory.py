@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 ENV가 되는 Factory
-
 """
 import copy
 import pandas as pd
@@ -12,12 +11,7 @@ import sys
 import random
 
 from sympy import legendre 
-from numba import jit, njit
-
-# ========================= Hyper Parameter ========================
-# 전체 생산 수량 낮춰주고 싶으면 조절
-STOCK = 1
-# ========================= Hyper Parameter ========================
+from numba import jit
 
 # Data Structure
 # df[] => (model명, model별 데이터)
@@ -28,6 +22,11 @@ STOCK = 1
 
 class factory(): 
     def __init__(self, product_list_with_df, time_df):
+        # ========================= Hyper Parameter ========================
+        # 전체 생산 수량 낮춰주고 싶으면 조절
+        self.STOCK = 1
+        # ========================= Hyper Parameter ========================
+        
         # 제품 별 공정 시간 data을 sec 단위로 바꿔서 저장
         self.df = self.set_df(product_list_with_df)
         
@@ -54,7 +53,7 @@ class factory():
         # line_state[1][0] ~ [19] : Buffer list []
         self.line_state = self.set_line_state(self.line, self.buffer)
         
-        # 공장의 가동 시간을 모두 더해서 초 단위로 바꿔서 total_time_rank에 저장
+        # 가장 짧은 종료 시간 (Best Score)
         self.total_time_rank = int(self.sum_time(time_df)/pd.Timedelta(seconds = 1))
         
         self.avail_list = self.get_avail(self.df)
@@ -173,18 +172,18 @@ class factory():
             line_state_list.append(['E', 'T'])
         return line_state_list
 
-    # Machine의 수 만큼 timer_list에 ['D', 0]를 추가해줌
+    # Machine의 수 만큼 timer_list에 ['U', 0]를 추가해줌
     def make_timer_list(self, df):
         timer_list = []
         for i in range(len(df[0][1])):
-            timer_list.append(['D', 0])
+            timer_list.append(['U', 0])
         return timer_list
 
     # 생산해야할 {모델: 개수}를 저장
     def set_stock(self, df):
         stock_state_list = dict()
         for model_set in df:
-            stock_state_list[model_set[0]] = (model_set[1][19][5] // STOCK)
+            stock_state_list[model_set[0]] = (model_set[1][19][5] // self.STOCK)
         return stock_state_list
     
     # Machine의 수 만큼 빈 buffer []를 만들어서 저장
@@ -231,6 +230,9 @@ class factory():
                 # 각 machine의 cycle time 저장
                 machine_order = [0, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 ,1, 2, 3, 4, 5, 6, 7, 8]
                 for idx in machine_order:
+                    # Raw data Error: Solved
+                    if (machine_set[1][idx][4] > 100):
+                        machine_set[1][idx][4] = 12
                     cycle_time.append(machine_set[1][idx][4])
                 result.append([act, cycle_time])
         return result
@@ -425,6 +427,7 @@ class factory():
                         
             # 현재 시간 + 1
             self.now_time += 1
+            # self.show_state()
 
         # Machine 1이 비었다면
         if self.line_state[0][0][0] == 'E':
@@ -435,11 +438,11 @@ class factory():
                     self.total_time_rank = self.now_time
                 # Done is True
                 return np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, 
-                                                self.maxbuffer)), reward, True, {}
+                                                self.maxbuffer)), reward, True
             else:
                 # Done is False
                 return np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, 
-                                                self.maxbuffer)), reward, False, {} 
+                                                self.maxbuffer)), reward, False
     
     # ENV reset
     def reset(self):
@@ -449,3 +452,36 @@ class factory():
         self.line_state = self.set_line_state(self.line, self.buffer)
         self.now_time = 0 
         return np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, self.maxbuffer))   
+    
+    # 확인용 출력
+    def show_state(self):
+        input()
+        for machine_idx in range(len(self.line_state[0])):
+            if self.line_state[0][machine_idx][0] != 'E': 
+                print("Machine: %2d Model: %13s Pattern: %s Timer: %2s Buffer: %3s" %(machine_idx, self.line_state[0][machine_idx][0][0], 
+                                                        self.line_state[0][machine_idx][0][1], self.line_state[0][machine_idx][1], 
+                                                        len(self.line_state[1][machine_idx])))
+            else:
+                print("Machine: %2d Model: %13s Pattern: %s Timer: %2s Buffer: %3s" %(machine_idx, self.timer_list[machine_idx][0], 
+                                                        self.timer_list[machine_idx][0], self.line_state[0][machine_idx][1],
+                                                        len(self.line_state[1][machine_idx])))
+        return
+    
+    # 공장 Raw Data 저장
+def save_eval_data(month):
+    eval_dir = "raw_data_evaluation/" + month + "/"
+    product_list = []
+    product_list_ = glob.glob(os.path.join(eval_dir, "*"))
+
+    for i in product_list_:
+        save_list = []
+        model_name = i[23:]
+        file_route = i + "/"+ model_name +".csv"
+        save_list.append(i[22:])
+        save_list.append(pd.read_csv(file_route, engine = 'python'))
+        product_list.append(save_list)
+    
+    time_file_route = "raw_data_stop_time/stoptime_" + month + ".csv" 
+    time_table = pd.read_csv(time_file_route, engine='python')
+    return product_list, time_table
+

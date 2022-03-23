@@ -5,27 +5,15 @@ Comparing performance of deterministic methods
 
 import factory
 import random
-import main
 import torch
 from matplotlib import pyplot as plt
-
-"""
-env.choice: [[['model', pattern], [cycle time * 20]], [['model', pattern], [cycle time * 20]], [['model', pattern], [cycle time * 20]] ...]
-    Model: env.choice[i][0][0]
-    Pattern: env.choice[i][0][1]
-    Cycletime: env.choice[i][1]
-    
-env.stock: [['Model', number], ...]
-    Model: env.stock[j][0]
-    Number: env.stock[j][1]
-"""
 
 # =====================================
 # Choosing Model
 
 # Rigid Method: AAABBBCCCDDD …
 def rigid_model(choice, stock, pattern_number):
-    for model_tuple in stock:
+    for model_tuple in stock.items():
         # if number of model is 0
         if model_tuple[1] != 0:
             model = model_tuple[0]
@@ -135,9 +123,9 @@ def random_pattern(patter_num):
 # Main fuction
 def single_excute():
     # 공장환경 불러오기
-    product_list, time_table = factory.save_eval_data("10")
+    product_list, time_table = factory.save_eval_data("06")
     env = factory.factory(product_list, time_table)
-    s = env.reset(product_list)
+    s = env.reset()
     
     # stop marker
     done = False
@@ -146,26 +134,27 @@ def single_excute():
     # choice idx
     choice_idx = 0
     
-    path = 'DQN_save/model_965.pth'
-    # Q network
-    q = main.Qnet(len(env.reset(product_list)), len(env.choice)).to('cuda')
-    q.load_state_dict(torch.load(path))
+    # path = 'DQN_save/model_965.pth'
+    # # Q network
+    # q = main.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    # q.load_state_dict(torch.load(path))
     
     # main loop
+    print(env.total_stock)
     while True:
         # Choose pattern allocating method
-        # pattern_num = rigid_pattern(pattern_num)
+        pattern_num = rigid_pattern(pattern_num)
         # pattern_num = circular_pattern_1(pattern_num)
         # pattern_num = circular_pattern_2(pattern_num)
         # pattern_num = circular_pattern_3(pattern_num)
         # pattern_num = random_pattern(pattern_num)
         
         # Choose model choosing method
-        # choice_idx = rigid_model(env.choice, env.stock, pattern_num)
+        choice_idx = rigid_model(env.choice, env.stock, pattern_num)
         # choice_idx = circular_model(env.choice, env.stock, pattern_num, choice_idx)
         # choice_idx = random_model(env.choice, env.stock, pattern_num)
         
-        choice_idx = q.sample_action(torch.from_numpy(s).float(), 0, env.choice, env.stock)
+        # choice_idx = q.sample_action(torch.from_numpy(s).float(), 0, env.choice, env.stock)
         
         # Error check
         if choice_idx == -1:
@@ -174,16 +163,17 @@ def single_excute():
         
         model = env.choice[choice_idx][0][0]
         pattern = env.choice[choice_idx][0][1]
-        print("Model: ", model, " Pattern: ", pattern, " Total stock: ", env.total_stock(env.stock))
-        s_prime, r, done, info = env.step(model, pattern)
+        # print("Model: ", model, " Pattern: ", pattern, " Total stock: ", env.total_stock())
+        env.step(model, pattern)
         
-        if env.total_stock(env.stock) == 0:
+        if env.total_stock() == 0:
             print(env.now_time)
             break
     return env.now_time
 
 result_time = []
-for i in range(1):
+iter_num = 10
+for i in range(iter_num):
     result_time.append(single_excute())
     
-print(result_time)
+print(sum(result_time) / iter_num)
