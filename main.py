@@ -9,6 +9,7 @@ import numpy as np
 import collections
 import random
 import os
+import glob
 
 import torch
 import torch.nn as nn
@@ -21,6 +22,24 @@ from matplotlib import pyplot as plt
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(torch.cuda.is_available())
 print(torch.cuda.get_device_name(0))
+
+# processing 파일 저장
+def save_eval_data(month):
+    eval_dir = "raw_data_evaluation/" + month + "/"
+    product_list = []
+    product_list_ = glob.glob(os.path.join(eval_dir, "*"))
+
+    for i in product_list_:
+        save_list = []
+        model_name = i[23:]
+        file_route = i + "/"+ model_name +".csv"
+        save_list.append(i[22:])
+        save_list.append(pd.read_csv(file_route, engine = 'python'))
+        product_list.append(save_list)
+    
+    time_file_route = "raw_data_stop_time/stoptime_" + month + ".csv" 
+    time_table = pd.read_csv(time_file_route, engine='python')
+    return product_list, time_table
 
 learning_rate = 0.05 # 원래는 0.0005
 gamma         = 0.98
@@ -120,8 +139,7 @@ def train(q, q_target, memory, optimizer):
 
 def main():
     # 공장환경 불러오기
-    # 10월로 바꿀 것
-    product_list, time_table = factory.save_eval_data("10")
+    product_list, time_table = factory.save_eval_data("06")
     env = factory.factory(product_list, time_table)
     
     q = Qnet(len(env.reset(product_list)), len(env.choice)).to('cuda')
