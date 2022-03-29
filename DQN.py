@@ -5,13 +5,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import os
+import numpy as np
 
 # ========================= Hyper Parameter ========================
 learning_rate = 0.0005
 gamma         = 0.98
 buffer_limit  = 50000
 batch_size    = 32
-epoch = 10000
+epoch = 1000
+train_interval = 30
+update_interval = 20
 # ========================= Hyper Parameter ========================
 
 # ReplayBuffer
@@ -27,7 +30,11 @@ class ReplayBuffer():
     
     def sample(self, n):
         mini_batch = random.sample(self.buffer, n)
-        s_lst, a_lst, r_lst, s_prime_lst, done_mask_lst = [], [], [], [], []
+        s_lst = []
+        a_lst = []
+        r_lst = [] 
+        s_prime_lst = []
+        done_mask_lst = []
         for transition in mini_batch:
             s, a, r, s_prime, done_mask = transition
             s_lst.append(s)         
@@ -36,12 +43,16 @@ class ReplayBuffer():
             s_prime_lst.append(s_prime)
             done_mask_lst.append([done_mask])
 
-        return torch.tensor(s_lst, dtype = torch.float, device = self.device), torch.tensor(a_lst, device = self.device), \
-                torch.tensor(r_lst, device = self.device), torch.tensor(s_prime_lst, dtype=torch.float, device = self.device), \
-                torch.tensor(done_mask_lst, device = self.device)
+        return torch.tensor(np.array(s_lst), dtype = torch.float, device = self.device), torch.tensor(np.array(a_lst), 
+                device = self.device), torch.tensor(np.array(r_lst), device = self.device), \
+                torch.tensor(np.array(s_prime_lst), dtype=torch.float, device = self.device),\
+                torch.tensor(np.array(done_mask_lst), device = self.device)
     
     def size(self):
         return len(self.buffer)
+    
+    def clear(self):
+        self.buffer.clear()
 
 # Neural Network Model Name: Qnet
 class Qnet(nn.Module):
@@ -55,7 +66,8 @@ class Qnet(nn.Module):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def forward(self, x):
-        x = torch.tensor(x, device = self.device) 
+        x = torch.Tensor.clone(x).detach().to('cuda')
+        # x = torch.tensor(x, device = self.device) 
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
@@ -84,11 +96,12 @@ class Qnet(nn.Module):
             return out.argmax().item()
         
     def save(self, file_name = 'model.pth'):
-        model_folder_path = 'DQN_save/'
+        model_folder_path = 'DDQN_model/'
         file_name = os.path.join(model_folder_path, file_name)
         torch.save(self.state_dict(), file_name)
         
 def train(q, q_target, memory, optimizer):
+    result = 0
     for i in range(10):
         s,a,r,s_prime,done_mask = memory.sample(batch_size)
         q_out = q(s)
@@ -96,7 +109,10 @@ def train(q, q_target, memory, optimizer):
         max_q_prime = q_target(s_prime).max(1)[0].unsqueeze(1)
         target = r + gamma * max_q_prime * done_mask
         loss = F.smooth_l1_loss(q_a, target)
+        result += loss.item()
         
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        
+    return result
