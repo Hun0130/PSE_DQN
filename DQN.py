@@ -8,13 +8,13 @@ import os
 import numpy as np
 
 # ========================= Hyper Parameter ========================
-learning_rate = 0.0005
+learning_rate = 0.005
 gamma         = 0.98
 buffer_limit  = 50000
 batch_size    = 32
-epoch = 10000
-train_interval = 30
-update_interval = 20
+epoch = 1000
+train_interval = 0
+update_interval = 5
 # ========================= Hyper Parameter ========================
 
 # ReplayBuffer
@@ -44,9 +44,9 @@ class ReplayBuffer():
             done_mask_lst.append([done_mask])
 
         return torch.tensor(np.array(s_lst), dtype = torch.float, device = self.device), torch.tensor(np.array(a_lst), 
-                device = self.device), torch.tensor(np.array(r_lst), device = self.device), \
+                device = self.device), torch.tensor(np.array(r_lst), dtype = torch.float, device = self.device), \
                 torch.tensor(np.array(s_prime_lst), dtype=torch.float, device = self.device),\
-                torch.tensor(np.array(done_mask_lst), device = self.device)
+                torch.tensor(np.array(done_mask_lst), dtype = torch.float, device = self.device)
     
     def size(self):
         return len(self.buffer)
@@ -89,31 +89,30 @@ class Qnet(nn.Module):
         else : 
             for i in range(len(choice)):
                 model = choice[i][0][0]
-                for j in stock:
+                for j in stock.items():
                     if j[0] == model:
                         if j[1] <= 0:
                             out[i] = -99999
             return out.argmax().item()
         
     def save(self, file_name = 'model.pth'):
-        model_folder_path = 'DDQN_model/'
+        model_folder_path = 'DQN_model/'
         file_name = os.path.join(model_folder_path, file_name)
         torch.save(self.state_dict(), file_name)
-        
-def train(q, q_target, memory, optimizer):
+
+def train(q, memory, optimizer):
     result = 0
     for i in range(10):
         s,a,r,s_prime,done_mask = memory.sample(batch_size)
         q_out = q(s)
         q_a = q_out.gather(1,a)
-        max_q_prime = q_target(s_prime).max(1)[0].unsqueeze(1)
+        max_q_prime = q(s_prime).max(1)[0].unsqueeze(1)
         target = r + gamma * max_q_prime * done_mask
         loss = F.smooth_l1_loss(q_a, target)
         result += loss.item()
         
-        optimizer.zero_grad()
-        loss.backward()
-        print(loss.dtype) 
-        optimizer.step()
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
         
     return result

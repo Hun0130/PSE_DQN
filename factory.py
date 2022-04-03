@@ -11,7 +11,6 @@ import sys
 import random
 
 from sympy import legendre 
-from numba import jit
 
 # Data Structure
 # df[] => (model명, model별 데이터)
@@ -24,7 +23,7 @@ class factory():
     def __init__(self, product_list_with_df, time_df):
         # ========================= Hyper Parameter ========================
         # 전체 생산 수량 낮춰주고 싶으면 조절
-        self.STOCK = 10
+        self.STOCK = 100
         # ========================= Hyper Parameter ========================
         
         # 제품 별 공정 시간 data을 sec 단위로 바꿔서 저장
@@ -363,9 +362,166 @@ class factory():
                     return False
                 
         return True
+    
+    def put(self, model, pattern):
+        # 모델과 패턴, 현재 시간을 라인에 넣어줌 (없었다면 'E')
+        self.line_state[0][0][0] = [model, pattern, self.now_time]  
+        
+        model_idx = self.find_model_index(model, self.df)
+        
+        # 타이머 설정 (없었다면 'T')
+        self.line_state[0][0][1] = self.df[model_idx][1][0][4] 
+        
+        # 생산했으니 재고에서 제외
+        self.stock[model] -= 1   
             
+    # ENV의 1 STEP : Machine1이 비워질때 or Product model
+    def step(self):
+        reward = 0
+        # Machine 1이 빌 때 까지
+        while self.line_state[0][0][0] != 'E':
+            for machine_idx in range(len(self.line_state[0]) -1, -1, -1):
+                # Machine이 비어 있는 경우
+                if (self.line_state[0][machine_idx][0] == 'E') and (self.timer_list[machine_idx][0] == 'U'): 
+                    # Machine1은 제외
+                    if machine_idx != 0:
+                        # Machine 전 버퍼가 비어있지 않은 경우 => 전 버퍼에서 제품을 꺼내서 Machine에 저장
+                        if len(self.line_state[1][machine_idx - 1]) != 0:
+                            # 버퍼의 맨 앞의 제품을 poplist에 저장
+                            product = self.line_state[1][machine_idx-1].pop(0)
+                            # [모델, 패턴 번호]를 저장
+                            self.line_state[0][machine_idx][0] = product
+                            # [M1, M2, M3 ..., M20]를 저장
+                            model_idx = self.find_model_index(product[0], self.df)
+                            # 제품 생산에 필요한 시간 저장
+                            self.line_state[0][machine_idx][1] = self.patterned_df[product[1]][model_idx][1][machine_idx][4]
+                        
+                        # Starvation 발생 (전 버퍼가 비어있어서 진행 불가능)
+                        else:
+                            self.starvation_time[machine_idx] += 1
+                
+                # Machine의 제품의 동작이 끝난 경우
+                elif (self.line_state[0][machine_idx][1] <= 0) and (self.timer_list[machine_idx][0] == 'U'):
+                    # Machine 후 버퍼의 용량이 남아 있는 경우 => Machine에서 제품을 꺼내서 후 버퍼에 저장
+                    if len(self.line_state[1][machine_idx]) < self.maxbuffer[machine_idx]:
+                        # 마지막 Machine에서 동작이 끝난 경우: 리워드 계산
+                        if machine_idx == (len(self.line_state[0]) - 1):
+                            # 리워드 계산
+                            reward += 5000 - self.cal_reward(self.line_state[0][machine_idx][0][0], self.line_state[0][machine_idx][0][1], 
+                            self.patterned_df, self.line_state[0][machine_idx][0][2], self.now_time)
+                        # Machine의 제품을 꺼내서 후 버퍼에 저장
+                        product = self.line_state[0][machine_idx][0]
+                        # 버퍼에 채우기
+                        self.line_state[1][machine_idx].append(product)
+                        # Machine 비우기
+                        self.line_state[0][machine_idx] = ['E', 'T']
+                        
+                        # 생산 종료
+                        if self.check_empty() and self.total_stock() == 0:
+                            self.production_time_record.append(self.now_time)
+                            if self.lowest_time > self.now_time:
+                                self.lowest_time = self.now_time
+                            # Done is True
+                            return reward, True, np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, self.maxbuffer))
+                        else:
+                            # Done is False
+                            return reward, False, np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, self.maxbuffer))
+                    
+                    # Blockage 발생 (후 버퍼의 용량이 남아있지 않아서 진행 불가능)
+                    else:
+                        self.blockage_time[machine_idx] += 1
+                
+                # Machine의 제품의 동작이 끝나지 않은 경우 + Machine상태가 UP인 경우
+                elif self.timer_list[machine_idx][0] == 'U':
+                    # 제품 생산 시간 1 감소
+                    self.line_state[0][machine_idx][1] -= 1
+                    # 타이머 시간 1 감소
+                    self.timer_list[machine_idx][1] -= 1
+                    
+                    # 특정 확률로 model Down 발생
+                    product = self.line_state[0][machine_idx][0]
+                    model_idx = self.find_model_index(product[0], self.df)
+                    if self.avail_list[model_idx][machine_idx] < random.random():
+                        self.timer_list[machine_idx][1] = self.make_timer(self.df, machine_idx, 
+                                                                        self.line_state[0][machine_idx][0][0], 'U')
+                        self.timer_list[machine_idx][0] = 'D'
+                
+                # Machine의 제품의 동작이 끝나지 않은 경우 + Machine상태가 DOWN인 경우
+                elif self.timer_list[machine_idx][0]== 'D':
+                    # 타이머 시간 1 감소
+                    self.timer_list[machine_idx][1] -= 1
+                    # Down time 1추가
+                    self.down_time[machine_idx] += 1
+                    # 만일 타이머 시간이 0보다 작아지면 : state를 UP으로
+                    if self.timer_list[machine_idx][1] <= 0:
+                        self.timer_list[machine_idx][1] = self.make_timer(self.df, machine_idx, 
+                                                                        self.line_state[0][machine_idx][0][0], 'D')
+                        self.timer_list[machine_idx][0] = 'U'
+                        
+            # 현재 시간 + 1
+            self.now_time += 1
+            
+            # 출력
+            # print(self.total_stock()) 
+            # self.show_state()
+        
+        return 'A', False, np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, self.maxbuffer))
+                
+    # 학습에 사용될 state를 생성 : break down 
+    def state_maker_break(self, line_state, time_state, pattern_df, max_buffer): 
+        # 결과를 저장할 list
+        state = []
+        # Machine state 확인
+        idx = 0
+        # time_state index 계산에 사용
+        time_idx = 0
+        # 각 machine을 확인
+        for machine_idx in line_state[idx]:
+            # machine state is empty 0 * 20, 0
+            if machine_idx[0] == 'E':
+                # cycle time of model is 0 * 20
+                for buffer_idx in range(20):
+                    state.append(0)
+                # time is 0
+                state.append(0)
+
+            # machine state is not empty : cycle time * 20, time
+            else:
+                # "empty" 대신 [model, pattern]이 저장되어 있음
+                model = machine_idx[0][0]
+                pattern = machine_idx[0][1]
+                # "timer"에 적힌 시간을 저장
+                time = machine_idx[1]
+                # model, pattern에 해당하는 df에서 machine별 cycle time을 찾아서 저장
+                model_idx = self.find_model_index(model, pattern_df[pattern])
+                for buffer_idx in range(len(pattern_df[pattern][model_idx][1])):
+                    state.append(pattern_df[pattern][model_idx][1][buffer_idx][4])
+                # time을 저장
+                state.append(time)
+                
+            time_idx += 1
+
+        # Buffer 확인
+        idx = 1
+        # 각 machine의 buffer를 확인
+        for machine_idx in range(len(line_state[idx]) - 1):
+            for buffer_idx in range(max_buffer[machine_idx]):
+                # 버퍼에 제품이 존재할 시, 제품 정보를 result에 입력
+                if buffer_idx < len(line_state[idx][machine_idx]):
+                    model = line_state[idx][machine_idx][buffer_idx][0]
+                    pattern = line_state[idx][machine_idx][buffer_idx][1]
+                    # model, pattern에 해당하는 df에서 machine별 cycle time을 찾아서 저장
+                    model_idx = self.find_model_index(model, pattern_df[pattern])
+                    for d in range(len(pattern_df[pattern][model_idx][1])):
+                        state.append(pattern_df[pattern][model_idx][1][d][4])
+                # 버퍼에 제품이 없을 시, cycle time이 0이라는 의미
+                else: 
+                    for d in range(20):
+                        state.append(0)
+        return state
+    
     # ENV의 1 STEP : Machine1이 비워질때까지 실행
-    def step(self, model, pattern):
+    def step_break(self, model, pattern):
         if self.total_stock() != 0:
             # 모델과 패턴, 현재 시간을 라인에 넣어줌 (없었다면 'E')
             self.line_state[0][0][0] = [model, pattern, self.now_time]  
@@ -376,7 +532,7 @@ class factory():
             self.line_state[0][0][1] = self.df[model_idx][1][0][4] 
             
             # 생산했으니 재고에서 제외
-            self.stock[model] -= 1
+            self.stock[model] -= 1                
         
             # Reward 값 : 초기 값 0
             reward = 0
@@ -414,12 +570,9 @@ class factory():
                             # 마지막 Machine에서 동작이 끝난 경우: 리워드 계산
                             if machine_idx == (len(self.line_state[0]) - 1):
                                 # 리워드 계산
-                                reward -= self.cal_reward(self.line_state[0][machine_idx][0][0], self.line_state[0][machine_idx][0][1], 
+                                reward += 1000 - self.cal_reward(self.line_state[0][machine_idx][0][0], self.line_state[0][machine_idx][0][1], 
                                 self.patterned_df, self.line_state[0][machine_idx][0][2], self.now_time)
-                                if reward > 0:
-                                    print(self.line_state[0])
-                                    print(self.line_state[0][machine_idx][0][2], self.now_time)
-                                    input()
+            
                             # Machine의 제품을 꺼내서 후 버퍼에 저장
                             product = self.line_state[0][machine_idx][0]
                             # 버퍼에 채우기
@@ -445,8 +598,6 @@ class factory():
                             self.timer_list[machine_idx][1] = self.make_timer(self.df, machine_idx, 
                                                                             self.line_state[0][machine_idx][0][0], 'U')
                             self.timer_list[machine_idx][0] = 'D'
-                            # Down time 1추가
-                            self.down_time[machine_idx] += 1
                     
                     # Machine의 제품의 동작이 끝나지 않은 경우 + Machine상태가 DOWN인 경우
                     elif self.timer_list[machine_idx][0]== 'D':
@@ -496,12 +647,8 @@ class factory():
                         # 마지막 Machine에서 동작이 끝난 경우: 리워드 계산
                         if machine_idx == (len(self.line_state[0]) - 1):
                             # 리워드 계산
-                            reward -= self.cal_reward(self.line_state[0][machine_idx][0][0], self.line_state[0][machine_idx][0][1], 
+                            reward += 1000 - self.cal_reward(self.line_state[0][machine_idx][0][0], self.line_state[0][machine_idx][0][1], 
                             self.patterned_df, self.line_state[0][machine_idx][0][2], self.now_time)
-                            if reward > 0:
-                                print(self.line_state[0])
-                                print(self.line_state[0][machine_idx][0][2], self.now_time)
-                                input()
                         # Machine의 제품을 꺼내서 후 버퍼에 저장
                         product = self.line_state[0][machine_idx][0]
                         # 버퍼에 채우기
@@ -527,8 +674,6 @@ class factory():
                         self.timer_list[machine_idx][1] = self.make_timer(self.df, machine_idx, 
                                                                         self.line_state[0][machine_idx][0][0], 'U')
                         self.timer_list[machine_idx][0] = 'D'
-                        # Down time 1추가
-                        self.down_time[machine_idx] += 1
                 
                 # Machine의 제품의 동작이 끝나지 않은 경우 + Machine상태가 DOWN인 경우
                 elif self.timer_list[machine_idx][0]== 'D':
@@ -536,6 +681,8 @@ class factory():
                     self.timer_list[machine_idx][1] -= 1
                     # Down time 1추가
                     self.down_time[machine_idx] += 1
+                    # Reward correction : Down error deletion
+                    self.line_state[0][machine_idx][0][2] += 1
                     # 만일 타이머 시간이 0보다 작아지면 : state를 UP으로
                     if self.timer_list[machine_idx][1] <= 0:
                         self.timer_list[machine_idx][1] = self.make_timer(self.df, machine_idx, 
@@ -557,11 +704,11 @@ class factory():
                 if self.lowest_time > self.now_time:
                     self.lowest_time = self.now_time
                 # Done is True
-                return np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, 
+                return np.array(self.state_maker_break(self.line_state, self.timer_list, self.patterned_df, 
                                                 self.maxbuffer)), reward, True
             else:
                 # Done is False
-                return np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, 
+                return np.array(self.state_maker_break(self.line_state, self.timer_list, self.patterned_df, 
                                                 self.maxbuffer)), reward, False
     
     # ENV reset
@@ -575,7 +722,20 @@ class factory():
         self.starvation_time = [0 for i in range(20)]
         self.blockage_time = [0 for i in range(20)]
         self.now_time = 0 
-        return np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, self.maxbuffer))   
+        return np.array(self.state_maker(self.line_state, self.timer_list, self.patterned_df, self.maxbuffer)) 
+    
+    # ENV reset
+    def reset_break(self):
+        self.timer_list = self.make_timer_list(self.df)
+        self.stock = self.set_stock(self.df)
+        self.line = self.set_line(self.df)
+        self.buffer = self.set_buffer(self.df)
+        self.line_state = self.set_line_state(self.line, self.buffer)
+        self.down_time = [0 for i in range(20)]
+        self.starvation_time = [0 for i in range(20)]
+        self.blockage_time = [0 for i in range(20)]
+        self.now_time = 0 
+        return np.array(self.state_maker_break(self.line_state, self.timer_list, self.patterned_df, self.maxbuffer))
     
     # 모델 집합 출력
     def print_model(self, model):

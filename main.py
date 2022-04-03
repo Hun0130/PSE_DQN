@@ -2,6 +2,7 @@
 """
 Main function
 """
+from platform import machine
 from unicodedata import decimal
 import pandas as pd
 import numpy as np
@@ -10,12 +11,17 @@ import sys
 from matplotlib import pyplot as plt
 import torch
 import glob
+from collections import deque
 
 import factory
-import DQN
+import DDQN
 import DETER
+import DQN
+import Duel_DQN
+import PDQN
+import AllDQN
 
-def DDQN():
+def Deep_QN():
     # ENV setting
     product_list, time_table = factory.save_eval_data("06")
     env = factory.factory(product_list, time_table)
@@ -42,11 +48,141 @@ def DDQN():
     production_time_list = []
     loss_list = []
     
-    info = str(DQN.epoch) + "-" + str(DQN.train_interval) + "-" + str(DQN.update_interval) + "-" + str(DQN.learning_rate) + "-" + str(DQN.gamma) + "-" + str(env.STOCK)
+    info = str(DQN.epoch) + "-" + str(DQN.train_interval) + "-" + str(DQN.learning_rate) + "-" + str(DQN.gamma) + "-" + str(env.STOCK)
     
     for n_epi in range(DQN.epoch):
         # Linear annealing from 100% to 1%
         epsilon = max(0.01, ((DQN.epoch - n_epi) / DQN.epoch)) 
+        s = env.reset()
+        done = False
+        score = 0.0 
+        step_interval = 0
+        
+        sa_queue = []
+
+        while not done:
+            # 1 STEP
+            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+            # save state and action
+            sa_queue.append(s)
+            sa_queue.append(a)
+            # put products
+            env.put(env.choice[a][0][0], env.choice[a][0][1])
+            
+            # Until next action
+            while True:
+                reward, done, s_prime = env.step()
+                done_mask = 0.0 if done else 1.0
+
+                # Next action
+                if reward == 'A':
+                    break
+                
+                # Produce Products
+                # Memorize
+                s_r = sa_queue.pop()
+                a_r = sa_queue.pop()
+                transition = (s_r, a_r, reward/100.0, s_prime, done_mask )
+                score += reward
+                memory.put(transition)
+            
+            s = s_prime
+            step_interval += 1
+            
+            # End of one epoch
+            if done:
+                production_time_list.append(env.now_time)
+                reward_list.append(score)    
+                print("Episode :{}, Current Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".format(
+                                                            n_epi, env.now_time, env.lowest_time, score, high_score, epsilon * 100))
+                break
+            
+            # # Train : step interval
+            # if step_interval % DQN.train_interval == 0:
+            #     if memory.size() > 2000:
+            #         loss_list.append(DQN.train(q, memory, optimizer))
+        
+        # Train : 1 episode
+        if memory.size() > 2000:
+            loss_list.append(DQN.train(q, memory, optimizer))
+            
+        # Update target Q network
+        if n_epi % DQN.update_interval == 0 and n_epi != 0:
+            q_target.load_state_dict(q.state_dict())
+            
+        # Save model of highest reward
+        if (high_score < score):
+            high_score = score
+            if os.path.isfile(('DQN_model/' + model_name)):
+                os.remove(('DQN_model/' + model_name))
+            model_name = 'model_' + str(n_epi) + '.pth'
+            q.save(model_name)
+        
+        # Save model of highest goal
+        if (env.now_time == env.lowest_time):
+            if os.path.isfile(('DQN_model/' + model_name2)):
+                os.remove(('DQN_model/' + model_name2))
+            model_name2 = 'model2_' + str(n_epi) + '.pth'
+            q.save(model_name2)
+    
+    file_name = 'DQN_data/' + info + "_reward" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in reward_list:
+            f.write(str(i) + '\n')
+            
+    file_name = 'DQN_data/' + info + "_production_time" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in production_time_list:
+            f.write(str(i) + '\n')
+
+    file_name = 'DQN_data/' + info + "_loss" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in loss_list:
+            f.write(str(i) + '\n')
+    
+    plt.subplot(311)
+    plt.plot(reward_list)
+    plt.title("Reward")
+    plt.subplot(312)
+    plt.plot(production_time_list)
+    plt.title("Production Time")
+    plt.subplot(313)
+    plt.plot(loss_list)
+    plt.title("Loss")
+    plt.show()
+
+def Double_DQN():
+    # ENV setting
+    product_list, time_table = factory.save_eval_data("06")
+    env = factory.factory(product_list, time_table)
+    
+    # Q network
+    q = DDQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    
+    # Target network
+    q_target = DDQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    q_target.load_state_dict(q.state_dict())
+    
+    # Replay Buffer
+    memory = DDQN.ReplayBuffer()
+    optimizer = DDQN.optim.Adam(q.parameters(), lr = DDQN.learning_rate)
+    
+    score = 0.0  
+    
+    # Save Model
+    high_score = -sys.maxsize - 1
+    model_name = ''
+    model_name2 = ''
+    
+    reward_list = []
+    production_time_list = []
+    loss_list = []
+    
+    info = str(DDQN.epoch) + "-" + str(DDQN.train_interval) + "-" + str(DDQN.update_interval) + "-" + str(DDQN.learning_rate) + "-" + str(DDQN.gamma) + "-" + str(env.STOCK)
+    
+    for n_epi in range(DDQN.epoch):
+        # Linear annealing from 100% to 1%
+        epsilon = max(0.01, ((DDQN.epoch - n_epi) / DDQN.epoch)) 
         s = env.reset()
         done = False
         score = 0.0 
@@ -58,8 +194,350 @@ def DDQN():
             s_prime, reward, done = env.step(env.choice[a][0][0], env.choice[a][0][1])
             done_mask = 0.0 if done else 1.0
             
-            # Memorize
-            memory.put((s, a, reward/100.0, s_prime, done_mask))
+            if env.total_stock() != 0:
+                # Memorize
+                memory.put((s, a, reward/100.0, s_prime, done_mask))
+            
+            s = s_prime
+            score += reward
+            step_interval += 1
+            
+            # End of one epoch
+            if done:
+                production_time_list.append(env.now_time)
+                reward_list.append(score)    
+                print("Episode :{}, Current Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".format(
+                                                            n_epi, env.now_time, env.lowest_time, score, high_score, epsilon * 100))
+                break
+            
+            # Train : step interval
+            # if step_interval % DQN.train_interval == 0:
+            #     if memory.size() > 2000:
+            #         loss_list.append(DDQN.train(q, q_target, memory, optimizer))
+        
+        # Train : 1 episode
+        if memory.size() > 2000:
+            loss_list.append(DDQN.train(q, q_target, memory, optimizer))
+        
+        # Update target Q network
+        if n_epi % DDQN.update_interval == 0 and n_epi != 0:
+            q_target.load_state_dict(q.state_dict())
+
+        # Save model of highest reward
+        if (high_score < score):
+            high_score = score
+            if os.path.isfile(('Double_DQN_model/' + model_name)):
+                os.remove(('Double_DQN_model/' + model_name))
+            model_name = 'model_' + str(n_epi) + '.pth'
+            q.save(model_name)
+        
+        # Save model of highest goal
+        if (env.now_time == env.lowest_time):
+            if os.path.isfile(('Double_DQN_model/' + model_name2)):
+                os.remove(('Double_DQN_model/' + model_name2))
+            model_name2 = 'model2_' + str(n_epi) + '.pth'
+            q.save(model_name2)
+    
+    file_name = 'Double_DQN_data/' + info + "_reward" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in reward_list:
+            f.write(str(i) + '\n')
+            
+    file_name = 'Double_DQN_data/' + info + "_production_time" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in production_time_list:
+            f.write(str(i) + '\n')
+
+    file_name = 'Double_DQN_data/' + info + "_loss" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in loss_list:
+            f.write(str(i) + '\n')
+    
+    plt.subplot(311)
+    plt.plot(reward_list)
+    plt.title("Reward")
+    plt.subplot(312)
+    plt.plot(production_time_list)
+    plt.title("Production Time")
+    plt.subplot(313)
+    plt.plot(loss_list)
+    plt.title("Loss")
+    plt.show()
+
+def Dueling_DQN():
+    # ENV setting
+    product_list, time_table = factory.save_eval_data("06")
+    env = factory.factory(product_list, time_table)
+    
+    # Q network
+    q = Duel_DQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    
+    # Target network
+    q_target = Duel_DQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    q_target.load_state_dict(q.state_dict())
+    
+    # Replay Buffer
+    memory = Duel_DQN.ReplayBuffer()
+    optimizer = Duel_DQN.optim.Adam(q.parameters(), lr = Duel_DQN.learning_rate)
+    
+    score = 0.0  
+    
+    # Save Model
+    high_score = -sys.maxsize - 1
+    model_name = ''
+    model_name2 = ''
+    
+    reward_list = []
+    production_time_list = []
+    loss_list = []
+    
+    info = str(Duel_DQN.epoch) + "-" + str(Duel_DQN.train_interval) + "-" + str(Duel_DQN.update_interval) + "-" + str(Duel_DQN.learning_rate) + "-" + str(Duel_DQN.gamma) + "-" + str(env.STOCK)
+    
+    for n_epi in range(Duel_DQN.epoch):
+        # Linear annealing from 100% to 1%
+        epsilon = max(0.01, ((Duel_DQN.epoch - n_epi) / Duel_DQN.epoch)) 
+        s = env.reset()
+        done = False
+        score = 0.0 
+        step_interval = 0
+
+        while not done:
+            # 1 STEP
+            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+            s_prime, reward, done = env.step(env.choice[a][0][0], env.choice[a][0][1])
+            done_mask = 0.0 if done else 1.0
+            
+            if env.total_stock() != 0:
+                # Memorize
+                memory.put((s, a, reward/100.0, s_prime, done_mask))
+            
+            s = s_prime
+            score += reward
+            step_interval += 1
+            
+            # End of one epoch
+            if done:
+                production_time_list.append(env.now_time)
+                reward_list.append(score)    
+                print("Episode :{}, Current Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".format(
+                                                            n_epi, env.now_time, env.lowest_time, score, high_score, epsilon * 100))
+                break
+            
+            # Train : step interval
+            # if step_interval % Duel_DQN.train_interval == 0:
+            #     if memory.size() > 2000:
+            #         loss_list.append(Duel_DQN.train(q, q_target, memory, optimizer))
+        
+        # Train : 1 episode
+        if memory.size() > 2000:
+            loss_list.append(Duel_DQN.train(q, q_target, memory, optimizer))
+        
+        # Update target Q network
+        if n_epi % Duel_DQN.update_interval == 0 and n_epi != 0:
+            q_target.load_state_dict(q.state_dict())
+
+        # Save model of highest reward
+        if (high_score < score):
+            high_score = score
+            if os.path.isfile(('Dueling_DQN_model/' + model_name)):
+                os.remove(('Dueling_DQN_model/' + model_name))
+            model_name = 'model_' + str(n_epi) + '.pth'
+            q.save(model_name)
+        
+        # Save model of highest goal
+        if (env.now_time == env.lowest_time):
+            if os.path.isfile(('Dueling_DQN_model/' + model_name2)):
+                os.remove(('Dueling_DQN_model/' + model_name2))
+            model_name2 = 'model2_' + str(n_epi) + '.pth'
+            q.save(model_name2)
+    
+    file_name = 'Dueling_DQN_data/' + info + "_reward" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in reward_list:
+            f.write(str(i) + '\n')
+            
+    file_name = 'Dueling_DQN_data/' + info + "_production_time" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in production_time_list:
+            f.write(str(i) + '\n')
+
+    file_name = 'Dueling_DQN_data/' + info + "_loss" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in loss_list:
+            f.write(str(i) + '\n')
+    
+    plt.subplot(311)
+    plt.plot(reward_list)
+    plt.title("Reward")
+    plt.subplot(312)
+    plt.plot(production_time_list)
+    plt.title("Production Time")
+    plt.subplot(313)
+    plt.plot(loss_list)
+    plt.title("Loss")
+    plt.show()
+
+def PER_DQN():
+    # ENV setting
+    product_list, time_table = factory.save_eval_data("06")
+    env = factory.factory(product_list, time_table)
+    
+    # Q network
+    q = PDQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    
+    # Target network
+    q_target = PDQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    q_target.load_state_dict(q.state_dict())
+    
+    # Replay Buffer
+    memory = PDQN.ReplayBuffer()
+    optimizer = PDQN.optim.Adam(q.parameters(), lr = PDQN.learning_rate)
+    
+    score = 0.0  
+    
+    # Save Model
+    high_score = -sys.maxsize - 1
+    model_name = ''
+    model_name2 = ''
+    
+    reward_list = []
+    production_time_list = []
+    loss_list = []
+    
+    info = str(PDQN.epoch) + "-" + str(PDQN.train_interval) + "-" + str(PDQN.update_interval) + "-" + str(PDQN.learning_rate) + "-" + str(PDQN.gamma) + "-" + str(env.STOCK)
+    
+    for n_epi in range(PDQN.epoch):
+        # Linear annealing from 100% to 1%
+        epsilon = max(0.01, ((PDQN.epoch - n_epi) / PDQN.epoch)) 
+        s = env.reset()
+        done = False
+        score = 0.0 
+        step_interval = 0
+
+        while not done:
+            # 1 STEP
+            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+            s_prime, reward, done = env.step(env.choice[a][0][0], env.choice[a][0][1])
+            done_mask = 0.0 if done else 1.0
+            
+            if env.total_stock() != 0:
+                # Memorize
+                # Calculate TD-Error for Prioritized Experience Replay
+                memory.add(q, (s, a, reward/100.0, s_prime, done_mask))
+            
+            s = s_prime
+            score += reward
+            step_interval += 1
+            
+            # End of one epoch
+            if done:
+                production_time_list.append(env.now_time)
+                reward_list.append(score)    
+                print("Episode :{}, Current Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".format(
+                                                            n_epi, env.now_time, env.lowest_time, score, high_score, epsilon * 100))
+                break
+            
+            # Train : step interval
+            # if step_interval % PDQN.train_interval == 0:
+            #     if memory.size() > 2000:
+            #         loss_list.append(PDQN.train(q, q_target, memory, optimizer))
+        
+        # Train : 1 episode
+        if memory.size() > 2000:
+            loss_list.append(PDQN.train(q, q_target, memory, optimizer))
+        
+        # Update target Q network
+        if n_epi % PDQN.update_interval == 0 and n_epi != 0:
+            q_target.load_state_dict(q.state_dict())
+
+        # Save model of highest reward
+        if (high_score < score):
+            high_score = score
+            if os.path.isfile(('PER_DQN_model/' + model_name)):
+                os.remove(('PER_DQN_model/' + model_name))
+            model_name = 'model_' + str(n_epi) + '.pth'
+            q.save(model_name)
+        
+        # Save model of highest goal
+        if (env.now_time == env.lowest_time):
+            if os.path.isfile(('PER_DQN_model/' + model_name2)):
+                os.remove(('PER_DQN_model/' + model_name2))
+            model_name2 = 'model2_' + str(n_epi) + '.pth'
+            q.save(model_name2)
+    
+    file_name = 'PER_DQN_data/' + info + "_reward" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in reward_list:
+            f.write(str(i) + '\n')
+            
+    file_name = 'PER_DQN_data/' + info + "_production_time" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in production_time_list:
+            f.write(str(i) + '\n')
+
+    file_name = 'PER_DQN_data/' + info + "_loss" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in loss_list:
+            f.write(str(i) + '\n')
+    
+    plt.subplot(311)
+    plt.plot(reward_list)
+    plt.title("Reward")
+    plt.subplot(312)
+    plt.plot(production_time_list)
+    plt.title("Production Time")
+    plt.subplot(313)
+    plt.plot(loss_list)
+    plt.title("Loss")
+    plt.show()
+    
+def ALL_DQN():
+    # ENV setting
+    product_list, time_table = factory.save_eval_data("06")
+    env = factory.factory(product_list, time_table)
+    
+    # Q network
+    q = AllDQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    
+    # Target network
+    q_target = AllDQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    q_target.load_state_dict(q.state_dict())
+    
+    # Replay Buffer
+    memory = AllDQN.ReplayBuffer()
+    optimizer = AllDQN.optim.Adam(q.parameters(), lr = AllDQN.learning_rate)
+    
+    score = 0.0  
+    
+    # Save Model
+    high_score = -sys.maxsize - 1
+    model_name = ''
+    model_name2 = ''
+    
+    reward_list = []
+    production_time_list = []
+    loss_list = []
+    
+    info = str(AllDQN.epoch) + "-" + str(AllDQN.train_interval) + "-" + str(AllDQN.update_interval) + "-" + str(AllDQN.learning_rate) + "-" + str(AllDQN.gamma) + "-" + str(env.STOCK)
+    
+    for n_epi in range(AllDQN.epoch):
+        # Linear annealing from 100% to 1%
+        epsilon = max(0.01, ((AllDQN.epoch - n_epi) / AllDQN.epoch)) 
+        s = env.reset()
+        done = False
+        score = 0.0 
+        step_interval = 0
+
+        while not done:
+            # 1 STEP
+            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+            s_prime, reward, done = env.step(env.choice[a][0][0], env.choice[a][0][1])
+            done_mask = 0.0 if done else 1.0
+            
+            if env.total_stock() != 0:
+                # Memorize
+                # Calculate TD-Error for Prioritized Experience Replay
+                memory.add(q, (s, a, reward/100.0, s_prime, done_mask))
             
             s = s_prime
             score += reward
@@ -74,44 +552,158 @@ def DDQN():
                 break
             
             # # Train : step interval
-            # if step_interval % DQN.train_interval == 0:
+            # if step_interval % AllDQN.train_interval == 0:
             #     if memory.size() > 2000:
-            #         loss_list.append(DQN.train(q, q_target, memory, optimizer))
+            #         loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
         
         # Train : 1 episode
         if memory.size() > 2000:
-            loss_list.append(DQN.train(q, q_target, memory, optimizer))
+            loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
         
         # Update target Q network
-        if n_epi % DQN.update_interval == 0 and n_epi != 0:
+        if n_epi % AllDQN.update_interval == 0 and n_epi != 0:
             q_target.load_state_dict(q.state_dict())
 
         # Save model of highest reward
         if (high_score < score):
             high_score = score
-            if os.path.isfile(('DDQN_model/' + model_name)):
-                os.remove(('DDQN_model/' + model_name))
+            if os.path.isfile(('ALL_DQN_model/' + model_name)):
+                os.remove(('ALL_DQN_model/' + model_name))
             model_name = 'model_' + str(n_epi) + '.pth'
             q.save(model_name)
         
         # Save model of highest goal
         if (env.now_time == env.lowest_time):
-            if os.path.isfile(('DDQN_model/' + model_name2)):
-                os.remove(('DDQN_model/' + model_name2))
+            if os.path.isfile(('ALL_DQN_model/' + model_name2)):
+                os.remove(('ALL_DQN_model/' + model_name2))
             model_name2 = 'model2_' + str(n_epi) + '.pth'
             q.save(model_name2)
     
-    file_name = 'DDQN_data/' + info + "_reward" + '.txt'
+    file_name = 'ALL_DQN_data/' + info + "_reward" + '.txt'
     with open(file_name,'w', encoding='UTF-8') as f:
         for i in reward_list:
             f.write(str(i) + '\n')
             
-    file_name = 'DDQN_data/' + info + "_production_time" + '.txt'
+    file_name = 'ALL_DQN_data/' + info + "_production_time" + '.txt'
     with open(file_name,'w', encoding='UTF-8') as f:
         for i in production_time_list:
             f.write(str(i) + '\n')
 
-    file_name = 'DDQN_data/' + info + "_loss" + '.txt'
+    file_name = 'ALL_DQN_data/' + info + "_loss" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in loss_list:
+            f.write(str(i) + '\n')
+    
+    plt.subplot(311)
+    plt.plot(reward_list)
+    plt.title("Reward")
+    plt.subplot(312)
+    plt.plot(production_time_list)
+    plt.title("Production Time")
+    plt.subplot(313)
+    plt.plot(loss_list)
+    plt.title("Loss")
+    plt.show()
+    
+def ALL_DQN_break():
+    # ENV setting
+    product_list, time_table = factory.save_eval_data("06")
+    env = factory.factory(product_list, time_table)
+    
+    # Q network
+    q = AllDQN.Qnet(len(env.reset_break()), len(env.choice)).to('cuda')
+    
+    # Target network
+    q_target = AllDQN.Qnet(len(env.reset_break()), len(env.choice)).to('cuda')
+    q_target.load_state_dict(q.state_dict())
+    
+    # Replay Buffer
+    memory = AllDQN.ReplayBuffer()
+    optimizer = AllDQN.optim.Adam(q.parameters(), lr = AllDQN.learning_rate)
+    
+    score = 0.0  
+    
+    # Save Model
+    high_score = -sys.maxsize - 1
+    model_name = ''
+    model_name2 = ''
+    
+    reward_list = []
+    production_time_list = []
+    loss_list = []
+    
+    info = str(AllDQN.epoch) + "-" + str(AllDQN.train_interval) + "-" + str(AllDQN.update_interval) + "-" + str(AllDQN.learning_rate) + "-" + str(AllDQN.gamma) + "-" + str(env.STOCK)
+    
+    for n_epi in range(AllDQN.epoch):
+        # Linear annealing from 100% to 1%
+        epsilon = max(0.01, ((AllDQN.epoch - n_epi) / AllDQN.epoch)) 
+        s = env.reset_break()
+        done = False
+        score = 0.0 
+        step_interval = 0
+
+        while not done:
+            # 1 STEP
+            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+            s_prime, reward, done = env.step_break(env.choice[a][0][0], env.choice[a][0][1])
+            done_mask = 0.0 if done else 1.0
+            
+            # Memorize
+            # Calculate TD-Error for Prioritized Experience Replay
+            if env.total_stock() != 0:
+                memory.add(q, (s, a, reward/100.0, s_prime, done_mask))
+            
+            s = s_prime
+            score += reward
+            step_interval += 1
+            
+            # End of one epoch
+            if done:
+                production_time_list.append(env.now_time)
+                reward_list.append(score)    
+                print("Episode :{}, Current Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".format(
+                                                            n_epi, env.now_time, env.lowest_time, score, high_score, epsilon * 100))
+                break
+            
+            # Train : step interval
+            # if step_interval % AllDQN.train_interval == 0:
+            #     if memory.size() > 2000:
+            #         loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
+        
+        # Train : 1 episode
+        if memory.size() > 2000:
+            loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
+        
+        # Update target Q network
+        if n_epi % AllDQN.update_interval == 0 and n_epi != 0:
+            q_target.load_state_dict(q.state_dict())
+
+        # Save model of highest reward
+        if (high_score < score):
+            high_score = score
+            if os.path.isfile(('ALL_DQN_BREAK_model/' + model_name)):
+                os.remove(('ALL_DQN_BREAK_model/' + model_name))
+            model_name = 'model_' + str(n_epi) + '.pth'
+            q.save_break(model_name)
+        
+        # Save model of highest goal
+        if (env.now_time == env.lowest_time):
+            if os.path.isfile(('ALL_DQN_BREAK_model/' + model_name2)):
+                os.remove(('ALL_DQN_BREAK_model/' + model_name2))
+            model_name2 = 'model2_' + str(n_epi) + '.pth'
+            q.save_break(model_name2)
+    
+    file_name = 'ALL_DQN_BREAK_data/' + info + "_reward" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in reward_list:
+            f.write(str(i) + '\n')
+            
+    file_name = 'ALL_DQN_BREAK_data/' + info + "_production_time" + '.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in production_time_list:
+            f.write(str(i) + '\n')
+
+    file_name = 'ALL_DQN_BREAK_data/' + info + "_loss" + '.txt'
     with open(file_name,'w', encoding='UTF-8') as f:
         for i in loss_list:
             f.write(str(i) + '\n')
@@ -264,8 +856,8 @@ def Deter(iter_num, model_option, machine_option):
     
     print("Result: ", sum(result_time) / iter_num)
     return
-    
-def Test(iter_num, test_file):
+
+def Test(iter_num, folder, test_file):
     # ENV setting
     product_list, time_table = factory.save_eval_data("06")
     env = factory.factory(product_list, time_table)
@@ -278,9 +870,9 @@ def Test(iter_num, test_file):
     # choice idx
     choice_idx = 0
     
-    path = 'DDQN_model/' + test_file + '.pth'
+    path = folder + test_file + '.pth'
     # Q network
-    q = DQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    q = Duel_DQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
     q.load_state_dict(torch.load(path))
     print("Test file is ", test_file)
     # Save Result
@@ -291,6 +883,9 @@ def Test(iter_num, test_file):
     starvation_time = []
     # Save blockage tome
     blockage_time = []
+    
+    # Save input log
+    input_log = []
 
     for iter in range(iter_num):
         # Reset env
@@ -305,7 +900,8 @@ def Test(iter_num, test_file):
 
             model = env.choice[choice_idx][0][0]
             pattern = env.choice[choice_idx][0][1]
-            # print("Model: ", model, " Pattern: ", pattern, " Total stock: ", env.total_stock())
+            # log = "Model: " + model + " Pattern: " + str(pattern) + " Model set: " + env.print_model(model)
+            # input_log.append(log)
             
             s_prime, reward, done = env.step(model, pattern)
             s = s_prime
@@ -338,10 +934,76 @@ def Test(iter_num, test_file):
     with open(file_name,'w', encoding='UTF-8') as f:
         for i in blockage_time:
             f.write(str(i) + '\n')
+            
     
     print("Result: ", sum(result_time) / iter_num)
     return
 
+def Analysis(folder, test_file):
+    # ENV setting
+    product_list, time_table = factory.save_eval_data("06")
+    env = factory.factory(product_list, time_table)
+    env.reset()
+    
+    # stop marker
+    done = False
+    # Pattern_num: 0(#120, #140), 1(#120, #150), 2(#130, #140), 3(#130, #150)
+    pattern_num = 0
+    # choice idx
+    choice_idx = 0
+    
+    path = folder + test_file + '.pth'
+    # Q network
+    q = DDQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    q.load_state_dict(torch.load(path))
+    print("Test file is ", test_file)
+    # Save Result
+    result_time = []
+    # Save Downtime 
+    down_time = []
+    # Save starvation time
+    starvation_time = []
+    # Save blockage tome
+    blockage_time = []
+    
+    # Save input log
+    input_log = []
+    
+    # Reset env
+    s = env.reset()
+    while True:
+        # Choose pattern allocating method
+        choice_idx = q.sample_action(torch.from_numpy(s).float(), 0, env.choice, env.stock)
+        
+        # Error check
+        if choice_idx == -1:
+            print("Model Choosing Error!")
+
+        model = env.choice[choice_idx][0][0]
+        pattern = env.choice[choice_idx][0][1]
+        log = "Model: " + model + " Pattern: " + str(pattern) + " Model set: " + env.print_model(model)
+        input_log.append(log)
+        
+        s_prime, reward, done = env.step(model, pattern)
+        s = s_prime
+
+        # End of one epoch
+        if done:
+            result_time.append(env.now_time)
+            down_time.append(env.down_time)
+            starvation_time.append(env.starvation_time)
+            blockage_time.append(env.blockage_time)
+            # print(env.now_time)
+            break
+    
+    file_name = 'Deter_data/' + test_file + '_input_model.txt'
+    with open(file_name,'w', encoding='UTF-8') as f:
+        for i in input_log:
+            f.write(str(i) + '\n')
+            
+    
+    print("Result: ", sum(result_time), sum(blockage_time[0]), sum(starvation_time[0]))
+    return
 
 def Graph_Deter():
     # # Raw data 뽑기
@@ -392,7 +1054,8 @@ def Graph_Deter():
     data_dir = "Deter_data/"
     opt_list = ["Ri-0 3-0.txt", "Ri-0 1-0+2-1.txt", "Ri-1 Random.txt", 
                 "C-1 3-0.txt", "C-1 3-0-3-0-1-2-2-1.txt", "C-1 Random.txt",
-                "R-0 3-0.txt", "R-0 1-0+2-1.txt", "R-0 Random.txt", "result1.txt"]
+                "R-0 3-0.txt", "R-0 1-0+2-1.txt", "R-0 Random.txt", 
+                "result11_production_time.txt", "result12_production_time.txt", "result1.txt",]
     for opt in opt_list:
         file_list_ = glob.glob(os.path.join(data_dir, opt))
         data = []
@@ -412,7 +1075,8 @@ def Graph_Deter():
     
     data_name = ["Rigid (Rigid)", "Rigid (Numerical Optimal)", "Rigid (Random)",
                 "Circular (Rigid)", "Circular (Numerical Optimal)", "Circular (Random)",
-                "Random (Rigid)", "Random (Numerical Optimal)", "Random (Random)", "DDQN"]
+                "Random (Rigid)", "Random (Numerical Optimal)", "Random (Random)", "DQN without target Q", 
+                "Dueling DQN", "Double DQN"]
     
     ax.boxplot(data_list, notch=True)
     ax.legend(data_name, loc='center left', bbox_to_anchor=(1, 0.5))
@@ -422,8 +1086,107 @@ def Graph_Deter():
 
     plt.show()
 
+def Graph_Log():
+    data_dir = "Deter_data/"
+    
+    block_list = []
+    file_list_ = glob.glob(os.path.join(data_dir, "_blockage_time.txt"))
+    for file_name in file_list_:
+        data = [[] for i in range(20)]
+        file = open(file_name, "r")
+        while True:
+            line = file.readline()
+            if not line:
+                break
+            line = line.split(',')
+            for i in range(len(line)):
+                if i == 0:
+                    line[i] = int(line[i][1:])
+                if i == len(line) - 1:
+                    line[i] = int(line[i][:len(line[i])-2])
+                else:
+                    line[i] = int(line[i])
+            for machine_idx in range(len(line)):
+                data[machine_idx].append(int(line[machine_idx]))
+        for i in range(len(data)):
+            data[i] = float(np.average(data[i]))
+        block_list.append(data)
+        file.close()
+        
+    starv_list = []
+    file_list_ = glob.glob(os.path.join(data_dir, "_starvation_time.txt"))
+    for file_name in file_list_:
+        data = [[] for i in range(20)]
+        file = open(file_name, "r")
+        while True:
+            line = file.readline()
+            if not line:
+                break
+            line = line.split(',')
+            for i in range(len(line)):
+                if i == 0:
+                    line[i] = int(line[i][1:])
+                if i == len(line) - 1:
+                    line[i] = int(line[i][:len(line[i])-2])
+                else:
+                    line[i] = int(line[i])
+            for machine_idx in range(len(line)):
+                data[machine_idx].append(int(line[machine_idx]))
+        for i in range(len(data)):
+            data[i] = float(np.average(data[i]))
+        starv_list.append(data)
+        file.close()
+    print(starv_list[0])
+    machine_list = np.arange(20)
+    for idx in range(len(starv_list)):
+        plt.bar(machine_list - 0.1*idx, starv_list[idx], label = idx, width = 0.1)
+    # for graph in block_list:
+    #     ax.bar(machine_list, graph, label = 'Blockage time (sec)')
+    # plt.bar.set_xlabel('Machine number')
+    # plt.set_ylabel('Time(sec)')
+    plt.show()
+
+
 if __name__ == '__main__':
-    # DDQN()
-    Deter(10, 1, 1)
-    # Test(1, "result2-10")
+    Deep_QN()
+    # Double_DQN()
+    # Dueling_DQN()
+    # PER_DQN()
+    # ALL_DQN()
+    # ALL_DQN_break()
+
     # Graph_Deter()
+    
+    # Test
+    # Deter(100, 1, 1)
+    # Deter(100, 1, 2)
+    # Deter(100, 2, 4)
+    # Deter(100, 4, 1)
+    # Deter(100, 4, 2)
+    # Deter(100, 4, 4)
+    # Deter(100, 5, 1)
+    # Deter(100, 5, 2)
+    # Deter(100, 5, 4)
+    
+    # Test(100, 'DQN_model/',"model_9753")
+    # Test(100, 'DQN_model/',"model2_2541")
+    
+    # Test(100, 'Double_DQN_model/',"model_8236")
+    # Test(100, 'Double_DQN_model/',"model2_5126")
+    
+    #Test(100, 'Dueling_DQN_model/',"model_8421")
+    #Test(100, 'Dueling_DQN_model/',"model2_2204")
+    
+    # Test(100, 'PER_DQN_model/',"model_4237")
+    # Test(100, 'PER_DQN_model/',"model_9218")
+    # Test(100, 'PER_DQN_model/',"model2_4237")
+    # Test(100, 'PER_DQN_model/',"model2_4861")
+    
+    # Test(100, 'ALL_DQN_model/',"model_9376")
+    # Test(100, 'ALL_DQN_model/',"model_7344")
+    # Test(100, 'ALL_DQN_model/',"model2_2754")
+    # Test(100, 'ALL_DQN_model/',"model2_3073")
+
+    # Graph_Log()
+    
+    # Analysis('Double_DQN_model/', "result10")
