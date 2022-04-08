@@ -3,6 +3,7 @@
 Main function
 """
 from platform import machine
+from turtle import Turtle
 from unicodedata import decimal
 import pandas as pd
 import numpy as np
@@ -28,6 +29,8 @@ def Deep_QN():
     
     # Q network
     q = DQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    # print(len(env.reset()), len(env.choice))
+    # input()
     
     # Target network
     q_target = DQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
@@ -52,39 +55,48 @@ def Deep_QN():
     
     for n_epi in range(DQN.epoch):
         # Linear annealing from 100% to 1%
-        epsilon = max(0.01, ((DQN.epoch - n_epi) / DQN.epoch)) 
+        epsilon = max(0.1, ((DQN.epoch - n_epi) / DQN.epoch)) 
         s = env.reset()
         done = False
         score = 0.0 
         step_interval = 0
         
         sa_queue = []
+        sp_queue = []
 
+        # 1 STEP : Qeueing Reward
         while not done:
-            # 1 STEP
-            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
-            # save state and action
-            sa_queue.append(s)
-            sa_queue.append(a)
-            # put products
-            env.put(env.choice[a][0][0], env.choice[a][0][1])
-            
+            if env.total_stock() != 0:
+                # select action
+                a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+                # save state and action
+                sa_queue.append([s, a])
+                # put products
+                env.put(env.choice[a][0][0], env.choice[a][0][1])
+        
             # Until next action
             while True:
                 reward, done, s_prime = env.step()
                 done_mask = 0.0 if done else 1.0
-
                 # Next action
                 if reward == 'A':
+                    sp_queue.append(s_prime)
                     break
                 
                 # Produce Products
-                # Memorize
-                s_r = sa_queue.pop()
-                a_r = sa_queue.pop()
-                transition = (s_r, a_r, reward/100.0, s_prime, done_mask )
-                score += reward
-                memory.put(transition)
+                else:
+                    # Memorize
+                    s_r, a_r = sa_queue.pop()
+                    transition = (s_r, a_r, reward, sp_queue.pop(), done_mask )
+                    # transition = (s_r, a_r, reward, s_prime, done_mask )
+                    score += reward
+                    memory.put(transition)
+                    
+                if done:
+                    break
+                
+                if env.total_stock() == 0:
+                    sp_queue.append(s_prime)
             
             s = s_prime
             step_interval += 1
@@ -92,19 +104,25 @@ def Deep_QN():
             # End of one epoch
             if done:
                 production_time_list.append(env.now_time)
-                reward_list.append(score)    
-                print("Episode :{}, Current Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".format(
-                                                            n_epi, env.now_time, env.lowest_time, score, high_score, epsilon * 100))
+                reward_list.append(score)
+                if len(production_time_list) > 10:
+                    print("Episode :{}, Current Time : {:.1f}, Average Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".
+                        format(n_epi, env.now_time, np.average(production_time_list[-10:]), 
+                               env.lowest_time, score, high_score, epsilon * 100))
+                else:
+                    print("Episode :{}, Current Time : {:.1f}, Average Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".
+                        format(n_epi, env.now_time, np.average(production_time_list), 
+                               env.lowest_time, score, high_score, epsilon * 100))
                 break
             
-            # # Train : step interval
+            # Train : step interval
             # if step_interval % DQN.train_interval == 0:
             #     if memory.size() > 2000:
             #         loss_list.append(DQN.train(q, memory, optimizer))
         
         # Train : 1 episode
         if memory.size() > 2000:
-            loss_list.append(DQN.train(q, memory, optimizer))
+            loss_list.append(DQN.train_long(q, memory, optimizer))
             
         # Update target Q network
         if n_epi % DQN.update_interval == 0 and n_epi != 0:
@@ -182,42 +200,69 @@ def Double_DQN():
     
     for n_epi in range(DDQN.epoch):
         # Linear annealing from 100% to 1%
-        epsilon = max(0.01, ((DDQN.epoch - n_epi) / DDQN.epoch)) 
+        epsilon = max(0.1, ((DDQN.epoch - n_epi) / DDQN.epoch)) 
         s = env.reset()
         done = False
         score = 0.0 
         step_interval = 0
+        sa_queue = []
+        sp_queue = []
 
+        # 1 STEP : Queueing reward
         while not done:
-            # 1 STEP
-            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
-            s_prime, reward, done = env.step(env.choice[a][0][0], env.choice[a][0][1])
-            done_mask = 0.0 if done else 1.0
-            
             if env.total_stock() != 0:
-                # Memorize
-                memory.put((s, a, reward/100.0, s_prime, done_mask))
+                # select action
+                a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+                # save state and action
+                sa_queue.append([s, a])
+                # put products
+                env.put(env.choice[a][0][0], env.choice[a][0][1])
+            
+            # Until next action
+            while True:
+                reward, done, s_prime = env.step()
+                done_mask = 0.0 if done else 1.0
+
+                # Next action
+                if reward == 'A':
+                    sp_queue.append(s_prime)
+                    break
+                
+                # Produce Products
+                else:
+                    # Memorize
+                    s_r, a_r = sa_queue.pop()
+                    transition = (s_r, a_r, reward, sp_queue.pop(), done_mask )
+                    # transition = (s_r, a_r, reward, s_prime, done_mask )
+                    score += reward
+                    memory.put(transition)
+                    
+                if done:
+                    break
+                
+                if env.total_stock() == 0:
+                    sp_queue.append(s_prime)
             
             s = s_prime
-            score += reward
             step_interval += 1
             
             # End of one epoch
             if done:
                 production_time_list.append(env.now_time)
                 reward_list.append(score)    
-                print("Episode :{}, Current Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".format(
-                                                            n_epi, env.now_time, env.lowest_time, score, high_score, epsilon * 100))
+                if len(production_time_list) > 10:
+                    print("Episode :{}, Current Time : {:.1f}, Average Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".
+                        format(n_epi, env.now_time, np.average(production_time_list[-10:]), 
+                               env.lowest_time, score, high_score, epsilon * 100))
+                else:
+                    print("Episode :{}, Current Time : {:.1f}, Average Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".
+                        format(n_epi, env.now_time, np.average(production_time_list), 
+                               env.lowest_time, score, high_score, epsilon * 100))
                 break
-            
-            # Train : step interval
-            # if step_interval % DQN.train_interval == 0:
-            #     if memory.size() > 2000:
-            #         loss_list.append(DDQN.train(q, q_target, memory, optimizer))
         
         # Train : 1 episode
         if memory.size() > 2000:
-            loss_list.append(DDQN.train(q, q_target, memory, optimizer))
+            loss_list.append(DDQN.train_long(q, q_target, memory, optimizer))
         
         # Update target Q network
         if n_epi % DDQN.update_interval == 0 and n_epi != 0:
@@ -295,42 +340,131 @@ def Dueling_DQN():
     
     for n_epi in range(Duel_DQN.epoch):
         # Linear annealing from 100% to 1%
-        epsilon = max(0.01, ((Duel_DQN.epoch - n_epi) / Duel_DQN.epoch)) 
+        epsilon = max(0.1, ((Duel_DQN.epoch - n_epi) / Duel_DQN.epoch)) 
         s = env.reset()
         done = False
         score = 0.0 
         step_interval = 0
 
+        sa_queue = []
+        sp_queue = []
+
+        # 1 STEP
         while not done:
-            # 1 STEP
-            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
-            s_prime, reward, done = env.step(env.choice[a][0][0], env.choice[a][0][1])
-            done_mask = 0.0 if done else 1.0
-            
             if env.total_stock() != 0:
-                # Memorize
-                memory.put((s, a, reward/100.0, s_prime, done_mask))
+                # select action
+                a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+                # save state and action
+                sa_queue.append([s, a])
+                # put products
+                env.put(env.choice[a][0][0], env.choice[a][0][1])
+            
+            # Until next action
+            while True:
+                reward, done, s_prime = env.step()
+                done_mask = 0.0 if done else 1.0
+
+                # Next action
+                if reward == 'A':
+                    sp_queue.append(s_prime)
+                    break
+                
+                # Produce Products
+                else:
+                    # Memorize
+                    s_r, a_r = sa_queue.pop()
+                    transition = (s_r, a_r, reward, sp_queue.pop(), done_mask )
+                    # transition = (s_r, a_r, reward, s_prime, done_mask )
+                    score += reward
+                    memory.put(transition)
+                    
+                if done:
+                    break
+                
+                if env.total_stock() == 0:
+                    sp_queue.append(s_prime)
             
             s = s_prime
-            score += reward
             step_interval += 1
             
             # End of one epoch
             if done:
                 production_time_list.append(env.now_time)
                 reward_list.append(score)    
-                print("Episode :{}, Current Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".format(
-                                                            n_epi, env.now_time, env.lowest_time, score, high_score, epsilon * 100))
+                if len(production_time_list) > 10:
+                    print("Episode :{}, Current Time : {:.1f}, Average Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".
+                        format(n_epi, env.now_time, np.average(production_time_list[-10:]), 
+                               env.lowest_time, score, high_score, epsilon * 100))
+                else:
+                    print("Episode :{}, Current Time : {:.1f}, Average Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".
+                        format(n_epi, env.now_time, np.average(production_time_list), 
+                               env.lowest_time, score, high_score, epsilon * 100))
                 break
+        
+        # sa_queue = []
+        # sp_queue = []
+        
+        # # 1 STEP 
+        # while not done:
+        #     if env.total_stock() != 0:
+        #         # select action
+        #         a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+        #         # save state and action
+        #         sa_queue.append([s, a])
+        #         # put products
+        #         env.put(env.choice[a][0][0], env.choice[a][0][1])
+            
+        #     reward_value = []
+        #     # Until next action
+        #     while True:
+        #         reward, done, s_prime = env.step()
+        #         done_mask = 0.0 if done else 1.0
+                
+        #         # Next action
+        #         if reward == 'A':
+        #             sp_queue.append(s_prime)
+        #             if len(reward_value) != 0:
+        #                 while len(sa_queue) != 0:
+        #                     # Memorize
+        #                     s_r, a_r = sa_queue.pop()
+        #                     transition = (s_r, a_r, np.average(reward_value), sp_queue.pop(), done_mask)
+        #                     score += np.average(reward_value)
+        #                     memory.put(transition)
+        #             break
+                
+        #         # Produce Products
+        #         else:
+        #             reward_value.append(reward)
+
+        #         if done:
+        #             break
+            
+        #     s = s_prime
+        #     step_interval += 1
+            
+        #     # End of one epoch
+        #     if done:
+        #         production_time_list.append(env.now_time)
+        #         reward_list.append(score)
+        #         if len(production_time_list) > 10:
+        #             print("Episode :{}, Current Time : {:.1f}, Average Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".
+        #                 format(n_epi, env.now_time, np.average(production_time_list[-10:]), 
+        #                        env.lowest_time, score, high_score, epsilon * 100))
+        #         else:
+        #             print("Episode :{}, Current Time : {:.1f}, Average Time : {:.1f}, Lowest Time : {}, Score: {:1f}, High Score: {:1f} EPS : {:.1f}%".
+        #                 format(n_epi, env.now_time, np.average(production_time_list), 
+        #                        env.lowest_time, score, high_score, epsilon * 100))
+        #         break
             
             # Train : step interval
             # if step_interval % Duel_DQN.train_interval == 0:
             #     if memory.size() > 2000:
             #         loss_list.append(Duel_DQN.train(q, q_target, memory, optimizer))
+                    # print("Step : ", step_interval, "Loss", loss_list[-1])
         
-        # Train : 1 episode
+        # # Train : 1 episode
         if memory.size() > 2000:
-            loss_list.append(Duel_DQN.train(q, q_target, memory, optimizer))
+            loss_list.append(Duel_DQN.train_long(q, q_target, memory, optimizer))
         
         # Update target Q network
         if n_epi % Duel_DQN.update_interval == 0 and n_epi != 0:
@@ -414,19 +548,38 @@ def PER_DQN():
         score = 0.0 
         step_interval = 0
 
+        sa_queue = []
+
+        # 1 STEP
         while not done:
-            # 1 STEP
-            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
-            s_prime, reward, done = env.step(env.choice[a][0][0], env.choice[a][0][1])
-            done_mask = 0.0 if done else 1.0
-            
             if env.total_stock() != 0:
-                # Memorize
-                # Calculate TD-Error for Prioritized Experience Replay
-                memory.add(q, (s, a, reward/100.0, s_prime, done_mask))
+                # select action
+                a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+                # save state and action
+                sa_queue.append([s, a])
+                # put products
+                env.put(env.choice[a][0][0], env.choice[a][0][1])
+            
+            # Until next action
+            while True:
+                reward, done, s_prime = env.step()
+                done_mask = 0.0 if done else 1.0
+                # Next action
+                if reward == 'A':
+                    break
+                
+                # Produce Products
+                else:
+                    # Memorize
+                    s_r, a_r = sa_queue.pop()
+                    transition = (s_r, a_r, reward/100.0, s_prime, done_mask )
+                    score += reward
+                    memory.add(q, transition)
+                    
+                if done:
+                    break
             
             s = s_prime
-            score += reward
             step_interval += 1
             
             # End of one epoch
@@ -438,13 +591,13 @@ def PER_DQN():
                 break
             
             # Train : step interval
-            # if step_interval % PDQN.train_interval == 0:
-            #     if memory.size() > 2000:
-            #         loss_list.append(PDQN.train(q, q_target, memory, optimizer))
+            if step_interval % PDQN.train_interval == 0:
+                if memory.size() > 2000:
+                    loss_list.append(PDQN.train(q, q_target, memory, optimizer))
         
         # Train : 1 episode
-        if memory.size() > 2000:
-            loss_list.append(PDQN.train(q, q_target, memory, optimizer))
+        # if memory.size() > 2000:
+        #     loss_list.append(PDQN.train(q, q_target, memory, optimizer))
         
         # Update target Q network
         if n_epi % PDQN.update_interval == 0 and n_epi != 0:
@@ -528,19 +681,38 @@ def ALL_DQN():
         score = 0.0 
         step_interval = 0
 
+        sa_queue = []
+
+        # 1 STEP
         while not done:
-            # 1 STEP
-            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
-            s_prime, reward, done = env.step(env.choice[a][0][0], env.choice[a][0][1])
-            done_mask = 0.0 if done else 1.0
-            
             if env.total_stock() != 0:
-                # Memorize
-                # Calculate TD-Error for Prioritized Experience Replay
-                memory.add(q, (s, a, reward/100.0, s_prime, done_mask))
+                # select action
+                a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+                # save state and action
+                sa_queue.append([s, a])
+                # put products
+                env.put(env.choice[a][0][0], env.choice[a][0][1])
+            
+            # Until next action
+            while True:
+                reward, done, s_prime = env.step()
+                done_mask = 0.0 if done else 1.0
+                # Next action
+                if reward == 'A':
+                    break
+                
+                # Produce Products
+                else:
+                    # Memorize
+                    s_r, a_r = sa_queue.pop()
+                    transition = (s_r, a_r, reward/100.0, s_prime, done_mask )
+                    score += reward
+                    memory.add(q, transition)
+                    
+                if done:
+                    break
             
             s = s_prime
-            score += reward
             step_interval += 1
             
             # End of one epoch
@@ -552,13 +724,13 @@ def ALL_DQN():
                 break
             
             # # Train : step interval
-            # if step_interval % AllDQN.train_interval == 0:
-            #     if memory.size() > 2000:
-            #         loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
+            if step_interval % AllDQN.train_interval == 0:
+                if memory.size() > 2000:
+                    loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
         
         # Train : 1 episode
-        if memory.size() > 2000:
-            loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
+        # if memory.size() > 2000:
+        #     loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
         
         # Update target Q network
         if n_epi % AllDQN.update_interval == 0 and n_epi != 0:
@@ -642,19 +814,38 @@ def ALL_DQN_break():
         score = 0.0 
         step_interval = 0
 
+        sa_queue = []
+
+        # 1 STEP
         while not done:
-            # 1 STEP
-            a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
-            s_prime, reward, done = env.step_break(env.choice[a][0][0], env.choice[a][0][1])
-            done_mask = 0.0 if done else 1.0
-            
-            # Memorize
-            # Calculate TD-Error for Prioritized Experience Replay
             if env.total_stock() != 0:
-                memory.add(q, (s, a, reward/100.0, s_prime, done_mask))
+                # select action
+                a = q.sample_action(torch.from_numpy(s).float(), epsilon, env.choice, env.stock)
+                # save state and action
+                sa_queue.append([s, a])
+                # put products
+                env.put(env.choice[a][0][0], env.choice[a][0][1])
+            
+            # Until next action
+            while True:
+                reward, done, s_prime = env.step(1)
+                done_mask = 0.0 if done else 1.0
+                # Next action
+                if reward == 'A':
+                    break
+                
+                # Produce Products
+                else:
+                    # Memorize
+                    s_r, a_r = sa_queue.pop()
+                    transition = (s_r, a_r, reward/100.0, s_prime, done_mask )
+                    score += reward
+                    memory.add(q, transition)
+                    
+                if done:
+                    break
             
             s = s_prime
-            score += reward
             step_interval += 1
             
             # End of one epoch
@@ -666,13 +857,13 @@ def ALL_DQN_break():
                 break
             
             # Train : step interval
-            # if step_interval % AllDQN.train_interval == 0:
-            #     if memory.size() > 2000:
-            #         loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
+            if step_interval % AllDQN.train_interval == 0:
+                if memory.size() > 2000:
+                    loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
         
         # Train : 1 episode
-        if memory.size() > 2000:
-            loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
+        # if memory.size() > 2000:
+        #     loss_list.append(AllDQN.train(q, q_target, memory, optimizer))
         
         # Update target Q network
         if n_epi % AllDQN.update_interval == 0 and n_epi != 0:
@@ -821,9 +1012,22 @@ def Deter(iter_num, model_option, machine_option):
             
             model = env.choice[choice_idx][0][0]
             pattern = env.choice[choice_idx][0][1]
-            s_prime, reward, done = env.step(model, pattern)
             
-            # print(model, pattern, env.print_model(model))
+            # put products
+            if env.total_stock() > 0:
+                env.put(model, pattern)
+            
+            # Until next action
+            while True:
+                reward, done, s_prime = env.step()
+                # Next action
+                if reward == 'A':
+                    break
+                
+                if done:
+                    break
+            
+            # env.show_state()
             # input()
 
             # End of one epoch
@@ -872,7 +1076,7 @@ def Test(iter_num, folder, test_file):
     
     path = folder + test_file + '.pth'
     # Q network
-    q = Duel_DQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    q = DDQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
     q.load_state_dict(torch.load(path))
     print("Test file is ", test_file)
     # Save Result
@@ -888,22 +1092,27 @@ def Test(iter_num, folder, test_file):
     input_log = []
 
     for iter in range(iter_num):
-        # Reset env
         s = env.reset()
-        while True:
-            # Choose pattern allocating method
-            choice_idx = q.sample_action(torch.from_numpy(s).float(), 0, env.choice, env.stock)
+        done = False
+        
+        # 1 STEP
+        while not done:
+            if env.total_stock() != 0:
+                # select action
+                a = q.sample_action(torch.from_numpy(s).float(), 0.08, env.choice, env.stock)
+                # put products
+                env.put(env.choice[a][0][0], env.choice[a][0][1])
             
-            # Error check
-            if choice_idx == -1:
-                print("Model Choosing Error!")
-
-            model = env.choice[choice_idx][0][0]
-            pattern = env.choice[choice_idx][0][1]
-            # log = "Model: " + model + " Pattern: " + str(pattern) + " Model set: " + env.print_model(model)
-            # input_log.append(log)
+            # Until next action
+            while True:
+                reward, done, s_prime = env.step()
+                done_mask = 0.0 if done else 1.0
+                # Next action
+                if reward == 'A':
+                    break                    
+                if done:
+                    break
             
-            s_prime, reward, done = env.step(model, pattern)
             s = s_prime
 
             # End of one epoch
@@ -1146,11 +1355,11 @@ def Graph_Log():
     # plt.set_ylabel('Time(sec)')
     plt.show()
 
-
 if __name__ == '__main__':
-    Deep_QN()
+    # Deep_QN()
     # Double_DQN()
-    # Dueling_DQN()
+    Dueling_DQN()
+    
     # PER_DQN()
     # ALL_DQN()
     # ALL_DQN_break()
@@ -1168,14 +1377,14 @@ if __name__ == '__main__':
     # Deter(100, 5, 2)
     # Deter(100, 5, 4)
     
-    # Test(100, 'DQN_model/',"model_9753")
-    # Test(100, 'DQN_model/',"model2_2541")
+    # Test(10, 'DQN_model/',"[220976] model_9125")
+    # Test(10, 'DQN_model/',"model2_7101")
     
-    # Test(100, 'Double_DQN_model/',"model_8236")
-    # Test(100, 'Double_DQN_model/',"model2_5126")
+    #Test(100, 'Double_DQN_model/',"model_8627")
+    # Test(100, 'Double_DQN_model/',"model2_8574")
     
-    #Test(100, 'Dueling_DQN_model/',"model_8421")
-    #Test(100, 'Dueling_DQN_model/',"model2_2204")
+    # Test(100, 'Dueling_DQN_model/',"model_853")
+    # Test(100, 'Dueling_DQN_model/',"model2_2204")
     
     # Test(100, 'PER_DQN_model/',"model_4237")
     # Test(100, 'PER_DQN_model/',"model_9218")

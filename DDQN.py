@@ -11,11 +11,11 @@ import sys
 # ========================= Hyper Parameter ========================
 learning_rate = 0.005
 gamma         = 0.98
-buffer_limit  = 50000
+buffer_limit  = 5000
 batch_size    = 32
-epoch = 1000
-train_interval = 0
-update_interval = 5
+epoch = 10000
+train_interval = 'episode original'
+update_interval = 20
 # ========================= Hyper Parameter ========================
 
 # ReplayBuffer
@@ -103,17 +103,37 @@ class Qnet(nn.Module):
         
 def train(q, q_target, memory, optimizer):
     result = 0
+    # for i in range(10):
+    s,a,r,s_prime,done_mask = memory.sample(batch_size)
+    
+    # Compute Q(s_t, a) - the model computes Q(s_t)
+    q_a = q(s).gather(1,a)
+
+    max_q_prime = q_target(s_prime).max(1)[0].unsqueeze(1)
+    
+    target = r + gamma * max_q_prime * done_mask
+    
+    loss = F.smooth_l1_loss(q_a, target)    
+    
+    optimizer.zero_grad()
+    loss.backward()
+    result += loss.item()
+    optimizer.step()
+        
+    return result
+
+def train_long(q, q_target, memory, optimizer):
+    result = 0
     for i in range(10):
         s,a,r,s_prime,done_mask = memory.sample(batch_size)
         q_out = q(s)
         q_a = q_out.gather(1,a)
         max_q_prime = q_target(s_prime).max(1)[0].unsqueeze(1)
         target = r + gamma * max_q_prime * done_mask
-        loss = F.smooth_l1_loss(q_a, target)
-        result += loss.item()
-        
+        loss = F.smooth_l1_loss(q_a, target)    
         optimizer.zero_grad()
         loss.backward()
+        result += loss.item()
         optimizer.step()
         
     return result

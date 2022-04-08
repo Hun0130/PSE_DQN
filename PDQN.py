@@ -12,9 +12,9 @@ learning_rate = 0.005
 gamma         = 0.98
 buffer_limit  = 50000
 batch_size    = 32
-epoch = 10000
-train_interval = 0
-update_interval = 20
+epoch = 1000
+train_interval = 10
+update_interval = 50
 # ========================= Hyper Parameter ========================
 
 class SumTree:
