@@ -1076,7 +1076,7 @@ def Test(iter_num, folder, test_file):
     
     path = folder + test_file + '.pth'
     # Q network
-    q = DDQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
+    q = Duel_DQN.Qnet(len(env.reset()), len(env.choice)).to('cuda')
     q.load_state_dict(torch.load(path))
     print("Test file is ", test_file)
     # Save Result
@@ -1099,7 +1099,7 @@ def Test(iter_num, folder, test_file):
         while not done:
             if env.total_stock() != 0:
                 # select action
-                a = q.sample_action(torch.from_numpy(s).float(), 0.08, env.choice, env.stock)
+                a = q.sample_action(torch.from_numpy(s).float(), 0.15, env.choice, env.stock)
                 # put products
                 env.put(env.choice[a][0][0], env.choice[a][0][1])
             
@@ -1358,7 +1358,7 @@ def Graph_Log():
 if __name__ == '__main__':
     # Deep_QN()
     # Double_DQN()
-    Dueling_DQN()
+    # Dueling_DQN()
     
     # PER_DQN()
     # ALL_DQN()
@@ -1377,14 +1377,21 @@ if __name__ == '__main__':
     # Deter(100, 5, 2)
     # Deter(100, 5, 4)
     
-    # Test(10, 'DQN_model/',"[220976] model_9125")
-    # Test(10, 'DQN_model/',"model2_7101")
+    # Test(100, 'DQN_model/',"model_9424")
+    # Test(100, 'DQN_model/',"model_7692")
+    # Test(100, 'DQN_model/',"model2_7692")
+    # Test(100, 'DQN_model/',"model2_6084")
+    # Test(100, 'DQN_model/',"model2_7101")
     
-    #Test(100, 'Double_DQN_model/',"model_8627")
-    # Test(100, 'Double_DQN_model/',"model2_8574")
+    # Test(100, 'Double_DQN_model/',"model_8962")
+    # Test(100, 'Double_DQN_model/',"model_8587")
+    # Test(100, 'Double_DQN_model/',"model2_7164")
+    # Test(100, 'Double_DQN_model/',"model2_6118")
     
-    # Test(100, 'Dueling_DQN_model/',"model_853")
-    # Test(100, 'Dueling_DQN_model/',"model2_2204")
+    Test(100, 'Dueling_DQN_model/',"model_8542")
+    # Test(100, 'Dueling_DQN_model/',"model_8166")
+    # Test(100, 'Dueling_DQN_model/',"model2_7288")
+    # Test(100, 'Dueling_DQN_model/',"model2_6766")
     
     # Test(100, 'PER_DQN_model/',"model_4237")
     # Test(100, 'PER_DQN_model/',"model_9218")
